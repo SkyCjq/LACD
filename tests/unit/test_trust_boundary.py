@@ -84,3 +84,43 @@ def test_sec08_git_failure_is_unverified_not_enforced(tmp_path, monkeypatch):
     sha, warnings, error = cli_main._check_config_trust(plain)
     assert sha is None
     assert error in ("POLICY_TRUST_ANCHOR_MISSING", "POLICY_GIT_ERROR")
+
+
+def test_sec_r4_01_git_show_failure_is_unverified_not_fallback(tmp_path):
+    """SEC-R4-01: git show fails (e.g. blob deleted) -> UNVERIFIED with error,
+    NOT fallback to weaker lock policy."""
+    import sys
+    sys.path.insert(0, "src")
+    from lacd.cli import main as cli_main
+
+    repo = _make_repo(tmp_path)
+    # Add a lock with WEAKER policy [ci] (vs yaml [ci, security])
+    (repo / ".lacd").mkdir(exist_ok=True)
+    (repo / ".lacd" / "lock.json").write_text(
+        '{"lock_format_version": "1", "lacd_cli_version": "1.0.2", '
+        '"source": {"type": "git-tag", "repo": "x/y", "ref": "v1.0.2", "commit": "' + "a"*40 + '"}, '
+        '"schema_version": "1", "policy_version": "1", "template_version": "1.0.2", '
+        '"managed_files": [], "shared_files": [], '
+        '"generated_at": "2026-10-12T00:00:00+00:00", "generated_by": "test", '
+        '"required_checks": ["ci"]}')
+    _git(repo, "add", ".lacd/lock.json")
+    _git(repo, "commit", "-m", "add weak lock")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    # Simulate git show failure by using a non-existent SHA suffix
+    # (or we can test _read_file_at_sha directly with a bad path)
+    # Direct test: _read_file_at_sha with corrupted git state
+    content, err = cli_main._read_file_at_sha(repo, base_sha, "lacd.yaml")
+    assert err is None, "valid read should have no error"
+    assert content is not None
+
+    # Now test with a SHA that doesn't exist -> should be git error, not "not found"
+    content2, err2 = cli_main._read_file_at_sha(repo, "0"*40, "lacd.yaml")
+    assert err2 == "POLICY_GIT_ERROR", f"got {err2}"
+
+    # Full chain: trusted checks with git error must include error code
+    # (we simulate by checking the error propagates)
+    checks, warnings = cli_main._get_trusted_required_checks(repo, "0"*40)
+    assert checks == []
+    assert "POLICY_GIT_ERROR" in warnings, f"warnings: {warnings}"

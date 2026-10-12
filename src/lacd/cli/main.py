@@ -670,8 +670,11 @@ def _get_trusted_required_checks(project_dir: Path, trusted_sha: str) -> tuple[l
                 warnings.append("DUPLICATE_CHECKS_REMOVED")
         return deduped, True
 
-    # 1. lacd.yaml from trusted SHA
-    yaml_text = _read_file_at_sha(project_dir, trusted_sha, "lacd.yaml")
+    # 1. lacd.yaml from trusted SHA (SEC-R4-01: git errors are fail-closed)
+    yaml_text, yaml_err = _read_file_at_sha(project_dir, trusted_sha, "lacd.yaml")
+    if yaml_err:
+        # Git read failed -> UNVERIFIED, do NOT fall back to weaker policy
+        return [], warnings + [yaml_err]
     if yaml_text is not None:
         try:
             import yaml as _yaml
@@ -688,8 +691,10 @@ def _get_trusted_required_checks(project_dir: Path, trusted_sha: str) -> tuple[l
         except Exception:
             return [], warnings + ["POLICY_CONFIG_UNPARSEABLE"]
 
-    # 2. lock.json from trusted SHA (via schema validation)
-    lock_text = _read_file_at_sha(project_dir, trusted_sha, ".lacd/lock.json")
+    # 2. lock.json from trusted SHA (SEC-R4-01: git errors are fail-closed)
+    lock_text, lock_err = _read_file_at_sha(project_dir, trusted_sha, ".lacd/lock.json")
+    if lock_err:
+        return [], warnings + [lock_err]
     if lock_text is not None:
         try:
             import json
@@ -830,18 +835,33 @@ def _check_config_trust(project_dir: Path) -> tuple[str, list, str | None]:
         return None, [], "POLICY_GIT_ERROR"
 
 
-def _read_file_at_sha(project_dir: Path, sha: str, rel_path: str) -> str | None:
-    """Read file content at a specific commit SHA. Returns None if not found."""
+def _read_file_at_sha(project_dir: Path, sha: str, rel_path: str) -> tuple[str | None, str | None]:
+    """Read file content at a specific commit SHA.
+
+    Returns (content, error):
+    - (text, None): file read successfully
+    - (None, None): file confirmed not to exist at this SHA (git show exit 128 with "does not exist")
+    - (None, "POLICY_GIT_ERROR"): git failed (other non-zero exit or exception)
+    - (None, "POLICY_GIT_TIMEOUT"): git timed out
+
+    Callers MUST NOT treat git errors as "file not found" (SEC-R4-01).
+    """
     import subprocess
     try:
         r = subprocess.run(
             ["git", "show", f"{sha}:{rel_path}"],
             cwd=str(project_dir), capture_output=True, text=True, timeout=10)
         if r.returncode == 0:
-            return r.stdout
-        return None
+            return r.stdout, None
+        # Distinguish "not exist" from other git errors
+        stderr = (r.stderr or "").lower()
+        if "does not exist" in stderr or "bad revision" in stderr or "path does not exist" in stderr:
+            return None, None  # confirmed absent
+        return None, "POLICY_GIT_ERROR"
+    except subprocess.TimeoutExpired:
+        return None, "POLICY_GIT_TIMEOUT"
     except Exception:
-        return None
+        return None, "POLICY_GIT_ERROR"
 
 
 def _remote_dimension(contract, project_dir: Path):
