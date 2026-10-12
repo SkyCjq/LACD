@@ -639,57 +639,78 @@ def _detect_repo_branch(project_dir: Path) -> tuple[str | None, str | None]:
 def _get_required_checks(project_dir: Path) -> tuple[list, list]:
     """Return (checks, warnings) for the enforcement policy.
 
-    Source priority (D2 v2): ``lacd.yaml`` governance.required_checks >
-    ``.lacd/lock.json`` required_checks > empty (fail-closed).
+    Source priority (D2 v3): ``lacd.yaml`` governance.required_checks >
+    ``.lacd/lock.json`` required_checks (via LockFile.load) > empty.
 
-    Parse errors -> ([], ["POLICY_CONFIG_UNPARSEABLE"]).
-    Duplicates removed with "DUPLICATE_CHECKS_REMOVED" warning.
+    Explicit empty list [] in yaml does NOT fall back to lock (explicit wins).
+    Missing/None in yaml DOES fall back to lock.
+
+    Input validation:
+    - String "ci" (not list) -> invalid, POLICY_CONFIG_UNPARSEABLE
+    - Non-string entries -> filtered with INVALID_CHECK_ENTRY warning
+    - Parse errors -> ([], ["POLICY_CONFIG_UNPARSEABLE"])
+    - Duplicates removed with "DUPLICATE_CHECKS_REMOVED" warning
     """
     warnings: list = []
-    checks: list = []
+
+    def _validate(raw, source: str) -> tuple[list | None, bool]:
+        """Return (checks, is_explicit). None checks = not present/invalid."""
+        if raw is None:
+            return None, False  # not present -> fall through
+        if isinstance(raw, str):
+            # "ci" is not ["ci"]; reject to avoid ["c","i"] bug
+            warnings.append("POLICY_CONFIG_UNPARSEABLE")
+            return None, True  # explicit but invalid -> do not fall back
+        if not isinstance(raw, list):
+            warnings.append("POLICY_CONFIG_UNPARSEABLE")
+            return None, True
+        # raw is a list (possibly empty)
+        cleaned = []
+        for c in raw:
+            if isinstance(c, str) and c:
+                cleaned.append(c)
+            else:
+                if "INVALID_CHECK_ENTRY" not in warnings:
+                    warnings.append("INVALID_CHECK_ENTRY")
+        # Deduplicate
+        seen = set()
+        deduped = []
+        for c in cleaned:
+            if c not in seen:
+                seen.add(c)
+                deduped.append(c)
+            elif "DUPLICATE_CHECKS_REMOVED" not in warnings:
+                warnings.append("DUPLICATE_CHECKS_REMOVED")
+        return deduped, True  # explicit (even if [])
 
     # 1. lacd.yaml governance.required_checks
-    # NOTE: try load_config directly (not exists() check) so tests can mock it.
-    # ConfigNotFound -> no yaml, treat as empty (no warning).
-    # ConfigInvalid -> bad yaml, POLICY_CONFIG_UNPARSEABLE.
     try:
         from lacd.config.schema import load_config, ConfigNotFound
         cfg = load_config(str(project_dir))
         gov = getattr(cfg, "governance", None)
-        if gov is not None:
-            yaml_checks = getattr(gov, "required_checks", None)
-            if yaml_checks:
-                checks = [c for c in yaml_checks if isinstance(c, str) and c]
+        yaml_raw = getattr(gov, "required_checks", None) if gov else None
+        checks, explicit = _validate(yaml_raw, "yaml")
+        if explicit:
+            return checks if checks is not None else [], warnings
+        # not explicit -> fall through to lock
     except ConfigNotFound:
-        pass  # no lacd.yaml -> checks stays [], no warning
+        pass  # no yaml -> try lock
     except Exception:
         return [], ["POLICY_CONFIG_UNPARSEABLE"]
 
-    # 2. Fall back to lock.json (D2 v2)
-    if not checks:
-        try:
-            lock_path = project_dir / ".lacd" / "lock.json"
-            if lock_path.exists():
-                import json
-                lock = json.loads(lock_path.read_text(encoding="utf-8"))
-                lock_checks = lock.get("required_checks") or \
-                             (lock.get("governance") or {}).get("required_checks")
-                if lock_checks:
-                    checks = [c for c in lock_checks if isinstance(c, str) and c]
-        except Exception:
-            return [], ["POLICY_CONFIG_UNPARSEABLE"]
-
-    # 3. Deduplicate
-    seen = set()
-    deduped = []
-    for c in checks:
-        if c not in seen:
-            seen.add(c)
-            deduped.append(c)
-        elif "DUPLICATE_CHECKS_REMOVED" not in warnings:
-            warnings.append("DUPLICATE_CHECKS_REMOVED")
-
-    return deduped, warnings
+    # 2. lock.json via LockFile.load() (legitimate chain, not raw JSON)
+    try:
+        from lacd.config.lockfile import LockFile
+        lock = LockFile.load(project_dir)
+        lock_raw = lock.required_checks
+        checks, explicit = _validate(lock_raw, "lock")
+        if checks is not None:
+            return checks, warnings
+        return [], warnings
+    except FileNotFoundError:
+        return [], warnings  # no lock -> empty, no warning
+    except Exception:
+        return [], warnings + ["POLICY_CONFIG_UNPARSEABLE"]
 
 
 def _remote_dimension(contract, project_dir: Path):
@@ -720,6 +741,23 @@ def _remote_dimension(contract, project_dir: Path):
                 "no git origin remote pointing at GitHub; remote enforcement "
                 "cannot be checked")
     required_checks, check_warnings = _get_required_checks(project_dir)
+
+    # Trust boundary (D2 v3, Q2): config must come from committed baseline.
+    # If lacd.yaml is uncommitted or differs from HEAD, the policy source is
+    # untrusted -> downgrade to UNVERIFIED (prevents PR from lowering the bar).
+    trust_warnings = []
+    try:
+        import subprocess
+        # Check if lacd.yaml is tracked and unmodified vs HEAD
+        r = subprocess.run(
+            ["git", "status", "--porcelain", "lacd.yaml"],
+            cwd=str(project_dir), capture_output=True, text=True, timeout=10)
+        if r.returncode == 0 and r.stdout.strip():
+            # lacd.yaml is modified/untracked -> untrusted
+            trust_warnings.append("UNTRUSTED_CONFIG_SOURCE")
+    except Exception:
+        pass  # git not available -> skip trust check (not fail-closed here)
+
     from lacd.github.remote import EnforcementPolicy
     policy = EnforcementPolicy(
         policy_version="1",
@@ -743,8 +781,16 @@ def _remote_dimension(contract, project_dir: Path):
                     reasons=["REQUIRED_CHECKS_UNCONFIGURED"] + check_warnings + list(rep.reasons)),
                 "no required checks configured for this project; remote "
                 "enforcement cannot be verified (fail-closed)")
+    # Trust boundary: untrusted config source -> UNVERIFIED (fail-closed).
+    # A PR must not be able to lower its own bar via uncommitted config.
+    if trust_warnings and rep.status == "enforced":
+        return (contract.DimensionResult(
+                    status="unverified",
+                    reasons=trust_warnings + check_warnings + list(rep.reasons)),
+                "lacd.yaml is uncommitted or modified vs HEAD; policy source "
+                "untrusted (fail-closed)")
     # Propagate config warnings even when checks are present
-    all_reasons = check_warnings + list(rep.reasons)
+    all_reasons = trust_warnings + check_warnings + list(rep.reasons)
     return (contract.DimensionResult(status=rep.status,
                                       reasons=all_reasons),
             None)

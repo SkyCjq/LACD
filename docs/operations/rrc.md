@@ -140,8 +140,12 @@ EOF
 ```bash
 # 6. 模板必须同时含：闭合 ```json 块 + Template-Bundle-SHA256: 行
 # 用 parse_template_bundle 对模板做解析测试（见 docs/operations/release.md）
-python3 - <<'EOF'
-import sys; sys.path.insert(0, "rrc-build/src")
+# 注意：使用当前 checkout 的绝对 src 路径（非 rrc-build/src，避免嵌套）
+RRC_SRC="$(pwd)/src"
+python3 - <<EOF
+import sys; sys.path.insert(0, "$RRC_SRC")
+# 断言模块来源正确（非已安装版本）
+import lacd; assert lacd.__file__.startswith("$RRC_SRC"), lacd.__file__
 from lacd.upgrade.source import parse_template_bundle
 notes = open("release-notes-draft.md").read()  # Human 按模板起草的正文
 parsed = parse_template_bundle({"body": notes, "assets": [
