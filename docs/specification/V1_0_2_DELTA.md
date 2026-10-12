@@ -122,7 +122,7 @@
 | RRC-1 | 合并 SHA | `git rev-parse main` == PR merge SHA；与 Q2 的 HEAD 比对 |
 | RRC-2 | CI | 该 SHA 的 3.11/3.12 runs 均为 success；job 名匹配 |
 | RRC-3 | Required Checks | 管理员确认或只读 API 证实生效；不可读 → HOLD |
-| RRC-4 | Q2 记录 | `reviewed_head_sha` == 合并提交的 PR 父提交（merge commit 的第二父提交；squash 则为被 squash 的 PR HEAD）。Q2 审的是 PR HEAD，RRC 验的是 merge 结果，二者通过父子关系绑定，不要求字符串相等 |
+| RRC-4 | Q2 记录 | 按合并方式绑定：普通 merge 验证第二父提交 == Q2 HEAD；squash/rebase 用 PR 元数据+等价性证明，无路径时 HOLD。v1.0.2 release 要求普通 merge |
 | RRC-5 | 制品摘要 | wheel/zip/manifest 的 SHA256 互相对应；与构建日志一致 |
 | RRC-6 | Release notes | 可被 `parse_template_bundle` 解析（测试验证） |
 

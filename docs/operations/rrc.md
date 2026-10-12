@@ -65,19 +65,28 @@ gh api /repos/SkyCjq/LACD/branches/main/protection/required_status_checks
 
 **不得**因一个 API 的 403 推断"保护不存在"或"保护生效"。
 
-### RRC-4. Q2 记录检查
+### RRC-4. Q2 记录检查（按合并方式区分绑定）
 
 人工核对（不做机器门禁）：
 
 - [ ] Q2 结论原文存在（reviewer/模型/时间可查）
 - [ ] `reviewed_head_sha` == 本次 PR 合并前的最终 HEAD（若 PR 合并后有新 push，Q2 已过期）
 - [ ] 结论为 PASS（FAIL/HOLD → 不得发布）
+- [ ] 按合并方式验证 Q2 HEAD 与 merge 结果的绑定（见下表）
+
+| 合并方式 | RRC-4 绑定验证规则 |
+|---|---|
+| 普通 merge | GitHub PR `merged=true`、`merge_commit_sha=M`；`M` 的**第二父提交** == Q2 `reviewed_head_sha`；第一父提交为 base 侧；发布目标 main == M |
+| Squash merge | **不要求**父子关系；从可信 PR 元数据取得已审 HEAD `H`；验证 squash 树/差异与已审 PR 改动对应；无法确定时 **HOLD** |
+| Rebase merge | 用 PR merged 元数据 + main commit range + 变更等价性证明；**无等价性路径时 HOLD** |
+
+**v1.0.2 要求**：release PR 使用普通 merge（Human 选择）；squash/rebase 未实现等价性校验时一律 HOLD，不得伪造支持。
 
 | 结果 | 条件 |
 |---|---|
-| PASS | Q2 PASS 且 `reviewed_head_sha` 未过期 |
-| FAIL | Q2 FAIL → 停止 |
-| HOLD | Q2 HOLD 或记录缺失 → 等独立审查 |
+| PASS | Q2 PASS 且 `reviewed_head_sha` 未过期，且按上表绑定验证通过 |
+| FAIL | Q2 FAIL → 停止；或绑定验证明确失败 |
+| HOLD | Q2 HOLD、记录缺失、或 squash/rebase 无法证明等价性 |
 
 ### RRC-5. 制品摘要核验（wheel / zip / manifest）
 

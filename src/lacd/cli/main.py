@@ -636,6 +636,78 @@ def _detect_repo_branch(project_dir: Path) -> tuple[str | None, str | None]:
     return repo, branch
 
 
+def _get_trusted_required_checks(project_dir: Path, trusted_sha: str) -> tuple[list, list]:
+    """Read required_checks from the TRUSTED BASE SHA, not working tree.
+
+    This is the core trust boundary fix (Q2 B2): the PR cannot lower its own
+    bar by committing weakened config to its own HEAD, because we read from
+    origin/main (or other verified base), not from the PR's files.
+
+    Returns (checks, warnings). Uses git show <sha>:<path>.
+    """
+    warnings: list = []
+
+    def _validate(raw) -> tuple[list | None, bool]:
+        if raw is None:
+            return None, False
+        if isinstance(raw, str):
+            warnings.append("POLICY_CONFIG_UNPARSEABLE")
+            return None, True
+        if not isinstance(raw, list):
+            warnings.append("POLICY_CONFIG_UNPARSEABLE")
+            return None, True
+        cleaned = []
+        for c in raw:
+            if isinstance(c, str) and c:
+                cleaned.append(c)
+            elif "INVALID_CHECK_ENTRY" not in warnings:
+                warnings.append("INVALID_CHECK_ENTRY")
+        seen, deduped = set(), []
+        for c in cleaned:
+            if c not in seen:
+                seen.add(c); deduped.append(c)
+            elif "DUPLICATE_CHECKS_REMOVED" not in warnings:
+                warnings.append("DUPLICATE_CHECKS_REMOVED")
+        return deduped, True
+
+    # 1. lacd.yaml from trusted SHA
+    yaml_text = _read_file_at_sha(project_dir, trusted_sha, "lacd.yaml")
+    if yaml_text is not None:
+        try:
+            import yaml as _yaml
+            from lacd.config.schema import validate_config_dict
+            raw_data = _yaml.safe_load(yaml_text)
+            errors = validate_config_dict(raw_data)
+            if errors:
+                return [], warnings + ["POLICY_CONFIG_UNPARSEABLE"]
+            gov_raw = (raw_data.get("governance") or {}) if isinstance(raw_data, dict) else {}
+            yaml_raw = gov_raw.get("required_checks", None)
+            checks, explicit = _validate(yaml_raw)
+            if explicit:
+                return checks if checks is not None else [], warnings
+        except Exception:
+            return [], warnings + ["POLICY_CONFIG_UNPARSEABLE"]
+
+    # 2. lock.json from trusted SHA (via schema validation)
+    lock_text = _read_file_at_sha(project_dir, trusted_sha, ".lacd/lock.json")
+    if lock_text is not None:
+        try:
+            import json
+            from lacd.config.lockfile import validate_lock_dict, LockFile
+            data = json.loads(lock_text)
+            errors = validate_lock_dict(data)
+            if errors:
+                return [], warnings + ["POLICY_CONFIG_UNPARSEABLE"]
+            lock = LockFile.from_dict(data)
+            checks, explicit = _validate(lock.required_checks)
+            if checks is not None:
+                return checks, warnings
+        except Exception:
+            return [], warnings + ["POLICY_CONFIG_UNPARSEABLE"]
+
+    return [], warnings
+
+
 def _get_required_checks(project_dir: Path) -> tuple[list, list]:
     """Return (checks, warnings) for the enforcement policy.
 
@@ -721,22 +793,55 @@ def _get_required_checks(project_dir: Path) -> tuple[list, list]:
         return [], warnings + ["POLICY_CONFIG_UNPARSEABLE"]
 
 
-def _check_config_trust(project_dir: Path) -> list:
-    """Check if lacd.yaml is from a trusted (committed) source.
+def _check_config_trust(project_dir: Path) -> tuple[str, list, str | None]:
+    """Resolve trusted baseline for policy.
 
-    Returns ["UNTRUSTED_CONFIG_SOURCE"] if lacd.yaml is uncommitted/modified
-    vs HEAD, else []. Mockable in tests.
+    Returns (trusted_sha, warnings, error).
+    - trusted_sha: 40-char SHA of origin/main or merge-base, or None
+    - warnings: list of warning codes
+    - error: error code if trust cannot be established, else None
+
+    Trust root: the protected base branch (origin/main) at a verified SHA.
+    The PR's own HEAD is NEVER the trust root.
     """
+    import subprocess
     try:
-        import subprocess
+        # Get origin/main SHA (the protected base)
         r = subprocess.run(
-            ["git", "status", "--porcelain", "lacd.yaml"],
+            ["git", "rev-parse", "origin/main"],
             cwd=str(project_dir), capture_output=True, text=True, timeout=10)
-        if r.returncode == 0 and r.stdout.strip():
-            return ["UNTRUSTED_CONFIG_SOURCE"]
+        if r.returncode != 0:
+            return None, [], "POLICY_TRUST_ANCHOR_MISSING"
+        base_sha = r.stdout.strip()
+        if len(base_sha) != 40 or not all(c in "0123456789abcdef" for c in base_sha):
+            return None, [], "POLICY_BASE_SHA_UNVERIFIED"
+
+        # Verify the SHA is actually reachable (not a stale ref)
+        r2 = subprocess.run(
+            ["git", "cat-file", "-t", base_sha],
+            cwd=str(project_dir), capture_output=True, text=True, timeout=10)
+        if r2.returncode != 0 or r2.stdout.strip() != "commit":
+            return None, [], "POLICY_BASE_SHA_UNVERIFIED"
+
+        return base_sha, [], None
+    except subprocess.TimeoutExpired:
+        return None, [], "POLICY_GIT_TIMEOUT"
     except Exception:
-        pass
-    return []
+        return None, [], "POLICY_GIT_ERROR"
+
+
+def _read_file_at_sha(project_dir: Path, sha: str, rel_path: str) -> str | None:
+    """Read file content at a specific commit SHA. Returns None if not found."""
+    import subprocess
+    try:
+        r = subprocess.run(
+            ["git", "show", f"{sha}:{rel_path}"],
+            cwd=str(project_dir), capture_output=True, text=True, timeout=10)
+        if r.returncode == 0:
+            return r.stdout
+        return None
+    except Exception:
+        return None
 
 
 def _remote_dimension(contract, project_dir: Path):
@@ -766,10 +871,20 @@ def _remote_dimension(contract, project_dir: Path):
                                           reasons=["NO_GITHUB_REMOTE"]),
                 "no git origin remote pointing at GitHub; remote enforcement "
                 "cannot be checked")
-    required_checks, check_warnings = _get_required_checks(project_dir)
 
-    # Trust boundary (D2 v3, Q2): config must come from committed baseline.
-    trust_warnings = _check_config_trust(project_dir)
+    # Trust boundary (Q2 B2): resolve trusted base SHA FIRST.
+    # Policy MUST come from origin/main (protected base), NEVER from PR working tree.
+    trusted_sha, trust_warnings, trust_error = _check_config_trust(project_dir)
+    if trust_error:
+        # Cannot establish trust root -> UNVERIFIED (fail-closed, never ENFORCED)
+        return (contract.DimensionResult(
+                    status="unverified",
+                    reasons=[trust_error] + trust_warnings),
+                f"cannot establish trusted policy baseline: {trust_error}")
+
+    # Read policy from TRUSTED SHA, not working tree
+    required_checks, check_warnings = _get_trusted_required_checks(project_dir, trusted_sha)
+    all_warnings = trust_warnings + check_warnings
 
     from lacd.github.remote import EnforcementPolicy
     policy = EnforcementPolicy(
@@ -791,19 +906,11 @@ def _remote_dimension(contract, project_dir: Path):
     if not required_checks and rep.status == "enforced":
         return (contract.DimensionResult(
                     status="unverified",
-                    reasons=["REQUIRED_CHECKS_UNCONFIGURED"] + check_warnings + list(rep.reasons)),
+                    reasons=["REQUIRED_CHECKS_UNCONFIGURED"] + all_warnings + list(rep.reasons)),
                 "no required checks configured for this project; remote "
                 "enforcement cannot be verified (fail-closed)")
-    # Trust boundary: untrusted config source -> UNVERIFIED (fail-closed).
-    # A PR must not be able to lower its own bar via uncommitted config.
-    if trust_warnings and rep.status == "enforced":
-        return (contract.DimensionResult(
-                    status="unverified",
-                    reasons=trust_warnings + check_warnings + list(rep.reasons)),
-                "lacd.yaml is uncommitted or modified vs HEAD; policy source "
-                "untrusted (fail-closed)")
-    # Propagate config warnings even when checks are present
-    all_reasons = trust_warnings + check_warnings + list(rep.reasons)
+    # Propagate warnings (trusted base SHA is in all_warnings via trust resolution)
+    all_reasons = all_warnings + list(rep.reasons)
     return (contract.DimensionResult(status=rep.status,
                                       reasons=all_reasons),
             None)
