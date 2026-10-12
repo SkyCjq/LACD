@@ -10,7 +10,10 @@
    凭据：reviewer/模型、时间、`reviewed_head_sha`、原始结论（`PASS/FAIL/HOLD`）。
    HEAD 实质变化 → 过期重审。
 2. **RRC** = 合并后、Tag 前的制品/治理资格核验（脚本+手册），不是第二次审查。
+   RRC 只核验**预期**（合并 SHA、制品就绪、notes 草稿可解析），不核验 tag 本身
+   （尚不存在）。
 3. **PRV** = Release 后的 tag/资产/升级发现验证。通过后才批准生产采用。
+   PRV 核验**实际**（tag → SHA 是否等于 RRC 记录）；tag 被移动 → FAIL。
 4. 不恢复 `mode2-review` JSON 评论机器门禁、`mode2-freeze` HTML 解析、
    coordinator——Q2 的"独立性"由审查方上下文隔离保证，不由机器格式保证。
 
@@ -22,5 +25,8 @@
 
 ## 风险与回退
 
-- 独立 Web AI 不可用时 → Human 手工中继（备用 B），低频成本可控。
+- 独立 Web AI 不可用时 → Human **手工中继**（备用 B），即仅传递材料，
+  审查主体仍是独立 Web AI，不可替代。
 - Q2 与 Human Merge 之间插入新提交 → Q2 过期，必须重审（由 RRC 步骤 1 捕获）。
+- **残余风险**：RRC/PRV 只能证明核验时 tag 正确，不能保证永久不可变
+  （账号失陷/删重建）。缓解：PRV 后定期抽查、关键采用锁定 SHA。

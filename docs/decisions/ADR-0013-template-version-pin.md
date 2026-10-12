@@ -8,10 +8,12 @@
 
 1. 模板 `pip install` 行使用与模板 `template_version` 一致的 tag
    （`git+https://github.com/SkyCjq/LACD.git@vX.Y.Z`）。
-2. 不得预先编造尚未产生的合并 SHA；tag 的不可变性由"Human 打 tag +
-   RRC/PRV 核验 tag→SHA"保证，文档明示此信任链。
-3. 同项目 `lock.json` 的版本与模板安装版本不一致 → `verify` 非零错误
-  （fail-closed，不静默混用）。
+2. 不得预先编造尚未产生的合并 SHA；tag 的**核验时**正确性由"Human 打 tag +
+   RRC 核验预期 + PRV 核验实际 tag→SHA"保证。**残余风险**：tag 长期不可变性
+   不在保证范围内（见 ADR-0012），文档明示此信任边界。
+3. 同项目 `lock.json` 的版本与模板安装版本不一致 → `version_consistency`
+   维度报 `mismatch`（可见，不静默）。`verify --strict` 不因此硬失败
+   （保持 v1.0.1 兼容；Q1 S2）；用户通过状态可见性决策，不静默混用。
 
 ## 替代方案
 

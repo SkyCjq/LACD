@@ -118,7 +118,8 @@ NOT_INSTALLED → DECLARED → VALIDATED → ENFORCED
 
 ### 5.3 过期规则
 
-- `reviewed_head_sha` ≠ PR 当前 HEAD（有实质新提交）→ Q2 **过期**，必须重审。
+- `reviewed_head_sha` ≠ PR 当前 HEAD → Q2 **过期**，必须重审。
+  **无"实质变化"例外**——任何 HEAD 变化都触发重审（可判定性优先于便利性）。
 - Q2 `FAIL` / `HOLD` → 不得推荐合并，不得进入 RRC。
 - 只有"Q2 `PASS`（未过期）+ Required Checks 成功"，才建议 `READY_FOR_HUMAN_REVIEW`。
 - 不恢复 `mode2-review` JSON 评论机器门禁：Q2 的独立性由审查方上下文隔离保证，

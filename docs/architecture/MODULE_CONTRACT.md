@@ -540,7 +540,8 @@ def _remote_dimension(contract, project_dir: Path):
     rep = check_remote_enforcement(repo, branch, policy=policy, token=None, timeout=15)
 ```
 - 测试铁律：`_remote_dimension` 的任何调用路径不得以 `policy=None` 进入
-  `check_remote_enforcement`（mock 断言）。
+  `check_remote_enforcement`（mock 断言）；且必须验证 policy **内容**
+  （`policy_version=="1"`、`required_checks` 与配置来源一致），不仅是非空。
 
 ### 模板（`templates/workflows/lacd-verify.yml`）
 - `pip install` 行与模板 `template_version` 一致（`@vX.Y.Z` tag 形式）；
@@ -548,4 +549,4 @@ def _remote_dimension(contract, project_dir: Path):
 
 ### 审查 SOP（`docs/specification/PROTOCOL.md` 增量）
 - Q1/Q2/RRC/PRV 四术语定义、Q2 凭据字段（`reviewer/model/time/reviewed_head_sha/verdict/raw`）、
-  过期规则（HEAD 变化 → 重审）。
+  过期规则（**任何** HEAD 变化 → 重审，无"实质"例外）。
