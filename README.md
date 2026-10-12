@@ -2,6 +2,8 @@
 
 **Open-source governance workflow for AI coding agents: verifiable adoption, GitHub PR safeguards, human review, and safe versioned upgrades.**
 
+<img width="1774" height="887" alt="LACD Workflow Infographic Poster" src="https://github.com/user-attachments/assets/0f958732-fdd5-45e2-a434-e55d05c5cc78" />
+
 LACD is an independent, generic, business-agnostic framework for agentic
 software development. It defines how software projects organize agent work,
 verify evidence, control change risk, govern GitHub changes — and how they
