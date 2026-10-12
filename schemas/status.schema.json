@@ -1,0 +1,187 @@
+{
+  "$defs": {
+    "dimension": {
+      "additionalProperties": false,
+      "properties": {
+        "reasons": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "status": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "reasons"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://example.invalid/lacd/schemas/lacd-status/1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Schema \"lacd-status/1\" for the machine-readable adoption status document.",
+  "properties": {
+    "branch": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "dimensions": {
+      "additionalProperties": false,
+      "properties": {
+        "blocking": {
+          "$ref": "#/$defs/dimension"
+        },
+        "drift": {
+          "$ref": "#/$defs/dimension"
+        },
+        "local_validation": {
+          "$ref": "#/$defs/dimension"
+        },
+        "remote_enforcement": {
+          "$ref": "#/$defs/dimension"
+        }
+      },
+      "required": [
+        "local_validation",
+        "remote_enforcement",
+        "drift",
+        "blocking"
+      ],
+      "type": "object"
+    },
+    "generated_at": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "head_sha": {
+      "description": "Full 40-hex HEAD commit SHA, or null outside a git checkout.",
+      "pattern": "^[0-9a-f]{40}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "lacd_cli_version": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "mode": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "next_steps": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "project_dir": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "schema": {
+      "const": "lacd-status/1",
+      "type": "string"
+    },
+    "state": {
+      "enum": [
+        "NOT_INSTALLED",
+        "DECLARED",
+        "VALIDATED",
+        "ENFORCED",
+        "DRIFTED",
+        "BLOCKED",
+        "UNVERIFIED"
+      ],
+      "type": "string"
+    },
+    "version_consistency": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "consistent",
+            "mismatch",
+            "unknown"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "detail"
+      ],
+      "type": "object"
+    },
+    "versions": {
+      "additionalProperties": false,
+      "properties": {
+        "config_schema": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lock_format": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "locked_cli": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "policy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "template": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "config_schema",
+        "policy",
+        "lock_format",
+        "locked_cli",
+        "template"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema",
+    "lacd_cli_version",
+    "generated_at",
+    "project_dir",
+    "branch",
+    "head_sha",
+    "mode",
+    "versions",
+    "state",
+    "dimensions",
+    "version_consistency",
+    "next_steps"
+  ],
+  "title": "LACD status report (lacd status --json)",
+  "type": "object"
+}

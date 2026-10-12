@@ -1,0 +1,1 @@
+"""LACD command-line interface."""
