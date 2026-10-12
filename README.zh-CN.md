@@ -9,6 +9,8 @@ LACD 是一个独立、通用、业务无关的 Agentic 软件开发治理框架
 > tag / GitHub Release / 分支保护仍由 Human 执行（见
 > [docs/operations/human-approval.md](docs/operations/human-approval.md)）。
 
+<img width="1774" height="887" alt="LACD Workflow Infographic Poster" src="https://github.com/user-attachments/assets/187614d6-a958-427f-b43d-46041d9322a5" />
+
 ## LACD 能做什么
 
 - **可验证的接入**：`lacd init` 在 `lacd.yaml` 中声明意图；`lacd status --json` 输出机器可读的采用状态（`NOT_INSTALLED` / `DECLARED` / `VALIDATED` / `ENFORCED` / `DRIFTED` / `BLOCKED` / `UNVERIFIED`）；`lacd verify` 负责核验。Agent 以 CLI 状态为准，不靠猜。
