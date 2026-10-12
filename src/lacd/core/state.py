@@ -78,20 +78,50 @@ def _safe_join(project_dir: Path, rel: str) -> Path:
     return target
 
 
+def _dist_version() -> str | None:
+    """Installed distribution version, or ``None`` when not installed.
+
+    Running from a source tree (``PYTHONPATH=src``) has no distribution
+    metadata; that is *not* an error, it just means the package leg of the
+    four-version check cannot be evaluated.
+    """
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+    except ImportError:  # pragma: no cover - Python >= 3.11 always has it
+        return None
+    try:
+        return version("lacd")
+    except PackageNotFoundError:
+        return None
+
+
 def _version_consistency(lock: LockFile | None) -> dict:
+    """CLI/package/locked-CLI/template four-version consistency (R12).
+
+    ``template`` is informational (a project may legitimately lag behind the
+    CLI until it upgrades); ``mismatch`` is driven by the CLI legs only.
+    """
+    cli_v = __version__
+    pkg_v = _dist_version()
     if lock is None:
         return {"status": "unknown", "detail": "no lock file present"}
-    if lock.lacd_cli_version == __version__:
-        return {
-            "status": "consistent",
-            "detail": f"running CLI {__version__} matches locked lacd_cli_version",
-        }
+    locked_cli = lock.lacd_cli_version
+    template_v = lock.template_version
+    problems: list[str] = []
+    if locked_cli != cli_v:
+        problems.append(
+            f"running CLI {cli_v} differs from locked lacd_cli_version {locked_cli}"
+        )
+    if pkg_v is not None and pkg_v != cli_v:
+        problems.append(
+            f"installed package {pkg_v} differs from running CLI {cli_v}"
+        )
+    legs = f"cli={cli_v} package={pkg_v or 'not-installed'} locked_cli={locked_cli} template={template_v}"
+    if problems:
+        return {"status": "mismatch", "detail": "; ".join(problems) + f" ({legs})"}
     return {
-        "status": "mismatch",
-        "detail": (
-            f"running CLI {__version__} differs from locked "
-            f"lacd_cli_version {lock.lacd_cli_version}"
-        ),
+        "status": "consistent",
+        "detail": f"running CLI {cli_v} matches locked lacd_cli_version ({legs})",
     }
 
 
@@ -215,6 +245,16 @@ def compute_state(
             )
 
     vc = _version_consistency(lock)
+
+    # D5: a tag-only source pin must be explicitly annotated wherever a
+    # valid lock exists; it must never be mistaken for a strong pin.
+    if lock is not None and lock.source.pin_strength == "tag-only":
+        next_steps.append(
+            "Source pin is tag-only (no commit SHA recorded in "
+            ".lacd/lock.json source.commit); the upgrade source is pinned "
+            "by tag, not by an immutable commit. Record source.commit to "
+            "reach strong pinning."
+        )
 
     # Priority 4: config valid but no lock -> DECLARED.
     if lock is None:

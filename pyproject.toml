@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lacd"
-version = "1.0.0"
+version = "1.0.1"
 description = "Lightweight Agentic Collaborative Development - governance and collaboration framework for agentic software development"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -26,3 +26,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 lacd = ["schemas/*.json"]
 "lacd.schemas" = ["*.json"]
+# ADR-0008: the wheel must ship every managed template + manifest.json.
+# Without this, a clean install cannot run `lacd init` (P0 blocker, #2).
+# Explicit (not **/*) so __pycache__ never rides along; add new subdirs here.
+"lacd.templates" = ["*.json", "*.yaml", "managed/*", "workflows/*"]

@@ -33,6 +33,7 @@ _BEGIN_RE = re.compile(
     r"<!--\s*LACD:MANAGED:BEGIN\b[^>]*?section=\"([^\"]+)\"[^>]*?-->"
 )
 _END_RE = re.compile(r"<!--\s*LACD:MANAGED:END\s*-->")
+_COMMIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
 
 class LockCorruptError(ValueError):
@@ -115,12 +116,24 @@ class LockSource:
     type: str  # "git-tag" | "git-commit" | "local-dir"
     repo: str
     ref: str | None
-    commit: str | None
+    commit: str | None  # full 40-hex SHA when known, else None (honest)
 
     @classmethod
     def from_dict(cls, d: dict) -> "LockSource":
         return cls(type=d["type"], repo=d["repo"], ref=d.get("ref"),
                    commit=d.get("commit"))
+
+    @property
+    def pin_strength(self) -> str:
+        """Derived pin strength: ``"strong"`` | ``"tag-only"`` (D5/R13).
+
+        ``"strong"`` only when ``commit`` is a full 40-hex SHA. Anything
+        else (``None``, malformed) is ``"tag-only"`` — and must never be
+        reported as strongly pinned. Derived, never stored.
+        """
+        if isinstance(self.commit, str) and _COMMIT_SHA_RE.fullmatch(self.commit):
+            return "strong"
+        return "tag-only"
 
 
 @dataclass

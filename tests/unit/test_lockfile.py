@@ -172,3 +172,58 @@ def test_save_refuses_invalid_lock(tmp_path):
     lock.lock_format_version = "999"  # violates const "1"
     with pytest.raises(ValueError):
         lock.save(tmp_path)
+
+
+def test_pin_strength_strong_with_full_sha():
+    """D5: a recorded 40-hex commit SHA derives pin_strength 'strong'."""
+    from lacd.config.lockfile import LockSource
+    src = LockSource(type="git-tag", repo="SkyCjq/LACD", ref="v1.0.1",
+                     commit="b" * 40)
+    assert src.pin_strength == "strong"
+
+
+def test_pin_strength_tag_only_without_sha():
+    """D5: null commit -> 'tag-only' (v1.0.0-style honest null)."""
+    from lacd.config.lockfile import LockSource
+    src = LockSource(type="git-tag", repo="SkyCjq/LACD", ref="v1.0.1",
+                     commit=None)
+    assert src.pin_strength == "tag-only"
+
+
+def test_pin_strength_tag_only_with_malformed_sha():
+    """R13 negative: malformed SHAs must never derive 'strong'."""
+    from lacd.config.lockfile import LockSource
+    for bad in ("", "abc", "a" * 39, "a" * 41, "z" * 40, "A" * 40 + "extra"):
+        src = LockSource(type="git-tag", repo="SkyCjq/LACD", ref="v1.0.1",
+                         commit=bad)
+        assert src.pin_strength == "tag-only", bad
+
+
+def test_v100_lock_without_commit_still_reads(tmp_path):
+    """v1.0.0 locks (commit null) remain readable; pin is tag-only."""
+    import json
+    from lacd.config.lockfile import LockFile
+    from .conftest import make_lock_dict, write_project
+    d = write_project(tmp_path, lock=False)
+    lock_d = make_lock_dict()
+    lock_d["source"]["commit"] = None
+    (d / ".lacd" / "lock.json").write_text(json.dumps(lock_d),
+                                           encoding="utf-8")
+    lock = LockFile.load(d)
+    assert lock.source.pin_strength == "tag-only"
+    assert lock.validate() == []
+
+
+def test_lock_source_commit_round_trip(tmp_path):
+    """A strong-pinned lock survives save/load with pin intact."""
+    import json
+    from lacd.config.lockfile import LockFile
+    from .conftest import make_lock_dict, write_project
+    d = write_project(tmp_path, lock=False)
+    lock_d = make_lock_dict()
+    lock_d["source"]["commit"] = "c" * 40
+    (d / ".lacd" / "lock.json").write_text(json.dumps(lock_d),
+                                           encoding="utf-8")
+    lock = LockFile.load(d)
+    assert lock.source.pin_strength == "strong"
+    assert lock.source.commit == "c" * 40

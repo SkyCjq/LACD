@@ -4,7 +4,46 @@ All notable changes to LACD are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows
 [Semantic Versioning](https://semver.org/).
 
-## [1.0.0] — 2026-10-12 (release candidate)
+## [1.0.1] — 2026-10-12 (unreleased)
+
+Patch release: fixes real v1.0.0 defects, hardens the release/CI/governance
+chain, and adds AI discoverability assets. Backward compatible (no CLI/Schema
+breaking changes).
+
+### Fixed
+- **Wheel now ships templates** (P0): `pyproject.toml` `package-data` includes
+  `lacd/templates/**`; resources located via `importlib.resources`
+  (`lacd.cli.templates_dir()` / `lacd.config.schemas_dir()`). Clean
+  `pip install` + `lacd init` no longer crashes with `FileNotFoundError`.
+- **Release bundle discovery**: `parse_template_bundle()` supports three
+  fail-closed formats (closed fenced JSON / `Template-Bundle-SHA256:` line /
+  single-asset fallback); the real v1.0.0 release body (unclosed fence)
+  is a regression fixture and correctly yields `None`.
+- **ENFORCED no longer a false positive**: new versioned `EnforcementPolicy`;
+  `check_remote_enforcement(..., policy=...)` verifies each item (classic
+  protection and rulesets separately, ruleset must be active and ref-matched);
+  any unverifiable key dimension → `UNVERIFIED`, unsatisfied → `NOT_ENFORCED`.
+- `PRODUCT.md` no longer names any specific business project (independence).
+- Tracked build artifacts (`.coverage`, `build/`) removed via `git rm --cached`.
+
+### Added
+- `lacd verify --local` (zero network, `remote_enforcement=unverified/LOCAL_ONLY`)
+  and `--remote`; no flag keeps v1.0.0 behavior. Adopter CI template uses
+  `--local` so low-privilege PR CI stays green.
+- `status --json`: `dimensions.remote_enforcement.query` (`live|not_queried`).
+- `lock.json` `source.commit` (full SHA) with derived `pin_strength`
+  (`strong|tag-only`); never claims strong pin without a real SHA.
+- `.github/CODEOWNERS`; PR/Issue templates; `llms.txt` (experimental);
+  `docs/agents/` vendor-neutral quickstart; `docs/discoverability/` baseline.
+- README (EN/ZH): positioning line, What-it-does/does-not-do, Who-it's-for,
+  Quick Start, Security Model, Limitations, FAQ — every capability claim
+  backed by a runnable feature.
+
+### Changed
+- README status: v1.0.0 released; install command documented.
+- `template_version` → `1.0.1` (workflow template changed).
+
+## [1.0.0] — 2026-10-12
 
 First public version. Implements the complete v1.0 contract:
 

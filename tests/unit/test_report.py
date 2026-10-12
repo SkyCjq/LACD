@@ -10,7 +10,7 @@ from .conftest import write_project
 
 REQUIRED_FIELDS = [
     "schema", "lacd_cli_version", "generated_at", "project_dir", "branch",
-    "head_sha", "mode", "versions", "state", "dimensions",
+    "head_sha", "mode", "versions", "source_pin", "state", "dimensions",
     "version_consistency", "next_steps",
 ]
 
@@ -20,20 +20,25 @@ def test_status_document_fields_exact(project_factory):
     doc = build_status_dict(d)
     assert list(doc.keys()) == REQUIRED_FIELDS
     assert doc["schema"] == "lacd-status/1"
-    assert doc["lacd_cli_version"] == __version__ == "1.0.0"
+    assert doc["lacd_cli_version"] == __version__
     assert doc["project_dir"] == str(Path(d).resolve())  # absolute
     assert doc["mode"] == "lacd"
     assert doc["state"] == AdoptionState.VALIDATED.value
     assert set(doc["dimensions"]) == {
         "local_validation", "remote_enforcement", "drift", "blocking"}
-    for dim in doc["dimensions"].values():
-        assert set(dim) == {"status", "reasons"}
+    for name, dim in doc["dimensions"].items():
+        assert {"status", "reasons"} <= set(dim)
         assert isinstance(dim["reasons"], list)
+    # v1.0.1: remote_enforcement carries the query mode (D3/FR-03).
+    assert doc["dimensions"]["remote_enforcement"]["query"] == "not_queried"
     assert set(doc["versions"]) == {
-        "config_schema", "policy", "lock_format", "locked_cli", "template"}
+        "config_schema", "policy", "lock_format", "locked_cli", "template",
+        "package"}
     assert doc["versions"]["locked_cli"] == "1.0.0"
     assert doc["versions"]["config_schema"] == "1"
     assert set(doc["version_consistency"]) == {"status", "detail"}
+    # v1.0.1: source pin surfaced (D5); conftest locks pin "a"*40 -> strong.
+    assert doc["source_pin"] == {"strength": "strong", "commit": "a" * 40}
 
 
 def test_status_document_validates_against_schema(project_factory):

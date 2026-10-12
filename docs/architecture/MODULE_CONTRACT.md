@@ -470,3 +470,54 @@ AT-24：`agent_checklist` 必须实际调用 `core` 的状态计算（不是读�
 7. 测试不许为通过而放宽断言（防测试弱化）；新增测试先在旧行为上 FAIL
    （如适用，在 PR 描述中说明证伪过程）。
 8. 所有对外文档中的命令必须真实跑过（AT-25，docs smoke test 覆盖）。
+
+---
+
+## §9. v1.0.1 增量（2026-10-12 Freeze）
+
+### 打包（`pyproject.toml` / `src/lacd/__init__.py`）
+- wheel 必须含 `lacd/templates/**` 与 `lacd/schemas/*.json`（`package-data` 显式声明，
+  `src/lacd/templates/__init__.py` 使其成为包）。
+- 资源定位一律经 `importlib.resources`（`lacd.cli.templates_dir()` /
+  `lacd.config.schemas_dir()` 两个唯一入口），禁止 `Path(__file__)` 硬编码。
+
+### CLI（`cli/main.py`）
+```text
+lacd verify [--path DIR] [--strict] [--evidence FILE] [--local] [--remote]
+```
+- `--local` 与 `--remote` 互斥；`--local` 时不做任何网络调用，
+  `remote_enforcement = unverified/LOCAL_ONLY`。
+- `status --json` 新增 `dimensions.remote_enforcement.query: live|not_queried`；
+  `status` 本身永不触发网络。
+
+### 远端治理（`github/remote.py`）
+```python
+@dataclass
+class EnforcementPolicy:
+    policy_version: str = "1"
+    require_pull_request: bool = True
+    required_checks: list[str] = field(default_factory=list)
+    allow_bypass: bool = False
+    human_merge_required: bool = True   # solo 仓 0 approvals 时必须为真
+
+def check_remote_enforcement(repo, branch, *, policy: EnforcementPolicy | None = None,
+                             token=None, timeout=15) -> EnforcementReport:
+```
+- `policy=None` 时沿用 v1.0.0 语义（PR requirement 即 ENFORCED 的旧行为标记为 deprecated，
+  文档注明其不充分性）。
+- 有 policy 时：逐项核验；任一关键项不可读 → `unverified`；不满足 → `not_enforced`；
+  全部证实 → `enforced`。`EnforcementReport.details` 必须列出每项的 `checked: true/false`
+  与证据来源。
+
+### 升级源（`upgrade/source.py`）
+```python
+def parse_template_bundle(release: dict) -> dict | None:
+    """三种格式（闭合 JSON 围栏 / Template-Bundle-SHA256 行 / 单资产兜底），
+    fail-closed：无可信 sha256 时返回 None，调用方拒绝下载。"""
+```
+- 旧 `_parse_template_bundle` 保留为内部兼容；新解析对未闭合围栏、缺 sha256、
+  sha256 非 64 hex 一律返回 None（回归测试用真实 v1.0.0 Release body）。
+
+### 锁文件（`config/lockfile.py`）
+- `source` 段新增可选 `commit`（完整 SHA）与派生 `pin_strength: strong|tag-only`。
+- v1.0.0 锁（无 commit）可读；`verify` 对 `tag-only` 明确标注，不谎称强锁定。

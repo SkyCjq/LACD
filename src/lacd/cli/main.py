@@ -33,8 +33,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from lacd import __version__
-
-TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
+from lacd.cli import templates_dir
 
 DEFAULT_UPSTREAM_REPO = "SkyCjq/LACD"
 AGENTS_SECTION_ID = "lacd-agent-protocol"
@@ -93,7 +92,9 @@ def _sha256_file(path: Path) -> str:
 
 
 def _template_bytes(rel: str) -> bytes:
-    return (TEMPLATES_DIR / rel).read_bytes()
+    # Single template entry point (MODULE_CONTRACT §9): never hard-code
+    # Path(__file__) relatives here.
+    return templates_dir().joinpath(*rel.split("/")).read_bytes()
 
 
 def _resolve_project_dir(path_str: str | None) -> Path:
@@ -699,7 +700,8 @@ def _check_evidence(args: argparse.Namespace, contract, project_dir: Path) -> in
     return 0
 
 
-def _strict_failures(contract, project_dir: Path, report) -> list[str]:
+def _strict_failures(contract, project_dir: Path, report,
+                     local_only: bool = False) -> list[str]:
     failures: list[str] = []
     lv = report.local_validation
     if lv.status != "pass":
@@ -710,6 +712,12 @@ def _strict_failures(contract, project_dir: Path, report) -> list[str]:
     dr = report.drift
     if dr.status != "clean":
         failures.append(f"drift={_fmt_dim(dr.status, dr.reasons)}")
+    if local_only:
+        # --local is an explicit, auditable choice to skip the remote check
+        # (ADR-0009). The remote dimension stays unverified/LOCAL_ONLY and is
+        # never counted as a pass -- but it must not fail strict either,
+        # otherwise low-privilege CI (R07) could never go green.
+        return failures
     try:
         cfg = contract.load_config(str(project_dir))
         required = bool(cfg.verification.github_enforcement_required)
@@ -727,7 +735,21 @@ def _strict_failures(contract, project_dir: Path, report) -> list[str]:
     return failures
 
 
+def _local_only_dimension(contract):
+    """The remote_enforcement dimension for `verify --local`.
+
+    No network is touched; the dimension is honestly unverified with the
+    LOCAL_ONLY reason code (ADR-0009, D3). Never claims ENFORCED.
+    """
+    dim = contract.DimensionResult(status="unverified", reasons=["LOCAL_ONLY"])
+    note = ("remote check skipped (--local): no network requests were made; "
+            "remote enforcement is NOT verified, only local dimensions")
+    return dim, note
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
+    if args.local and args.remote:
+        raise UsageError("--local and --remote are mutually exclusive")
     project_dir = _resolve_project_dir(args.path)
     try:
         contract = _contract()
@@ -741,13 +763,20 @@ def cmd_verify(args: argparse.Namespace) -> int:
             return rc
 
     try:
-        remote_dim, remote_note = _remote_dimension(contract, project_dir)
+        if args.local:
+            remote_dim, remote_note = _local_only_dimension(contract)
+        else:
+            # --remote or no flag: v1.0.0 behavior (attempt remote, degrade on
+            # failure). Backward compatible.
+            remote_dim, remote_note = _remote_dimension(contract, project_dir)
         report = contract.compute_state(str(project_dir), remote=remote_dim)
     except Exception as exc:
         print(f"error: could not compute state: {exc}", file=sys.stderr)
         return 1
 
     print(f"LACD verify for {project_dir}")
+    if args.local:
+        print("  mode: local-only (remote enforcement not queried)")
     print(f"  state: {_state_name(report.state)}")
     print(f"  local_validation: {_fmt_dim(report.local_validation.status, report.local_validation.reasons)}")
     remote_line = (f"  remote_enforcement: "
@@ -761,13 +790,18 @@ def cmd_verify(args: argparse.Namespace) -> int:
     print(f"  version_consistency: {vc.get('status')} - {vc.get('detail')}")
 
     if args.strict:
-        failures = _strict_failures(contract, project_dir, report)
+        failures = _strict_failures(contract, project_dir, report,
+                                    local_only=args.local)
         if failures:
             print("STRICT FAILED:")
             for f in failures:
                 print(f"  - {f}")
             return 2
-        print("STRICT: all key dimensions satisfied")
+        if args.local:
+            print("STRICT: all local dimensions satisfied "
+                  "(remote not queried -- --local mode)")
+        else:
+            print("STRICT: all key dimensions satisfied")
         return 0
     return 0
 
@@ -974,7 +1008,8 @@ def _run_upgrade(project_dir: Path, args) -> int:
     try:
         plan = build_upgrade_plan(project_dir, args.to, source=source,
                                   bundle=bundle,
-                                  accept_major=args.accept_major)
+                                  accept_major=args.accept_major,
+                                  require_bundle=not args.dry_run)
     except UpgradeRefused as exc:
         print(f"lacd: {exc} (exit 3: refused)", file=sys.stderr)
         return 3
@@ -1102,6 +1137,12 @@ def _build_parser() -> argparse.ArgumentParser:
                           help="exit 2 when any key dimension is not pass/enforced")
     p_verify.add_argument("--evidence", metavar="FILE",
                           help="check an evidence JSON file's head_sha against the current HEAD")
+    p_verify.add_argument("--local", action="store_true",
+                          help="local dimensions only: no network requests, "
+                               "remote_enforcement=unverified/LOCAL_ONLY")
+    p_verify.add_argument("--remote", action="store_true",
+                          help="attempt remote enforcement check (default v1.0.0 "
+                               "behavior when neither --local nor --remote is given)")
     p_verify.set_defaults(func=cmd_verify)
 
     p_up = sub.add_parser("upgrade", help="check/plan/apply template upgrades")

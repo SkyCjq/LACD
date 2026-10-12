@@ -299,17 +299,25 @@ def _make_init_project(tmp_path):
     return tmp_path
 
 
+def _next_versions():
+    """Derive a patch/minor pair above the current CLI version (version-agnostic)."""
+    from lacd.core.versioning import parse_version
+    major, minor, patch = parse_version(__version__)
+    return f"{major}.{minor}.{patch + 1}", f"{major}.{minor + 1}.0"
+
+
 def _write_releases(tmp_path):
-    """A file:// upgrade source with 1.0.1 (patch) and 1.1.0 (minor)."""
+    """A file:// upgrade source with a patch and a minor above locked version."""
     import json
+    patch_v, minor_v = _next_versions()
     src = tmp_path / "upstream"
     src.mkdir()
     (src / "releases.json").write_text(json.dumps({
         "releases": [
-            {"version": "1.0.1", "tag": "v1.0.1", "commit": None,
+            {"version": patch_v, "tag": f"v{patch_v}", "commit": None,
              "published_at": None, "prerelease": False,
              "template_bundle": None, "notes": ""},
-            {"version": "1.1.0", "tag": "v1.1.0", "commit": None,
+            {"version": minor_v, "tag": f"v{minor_v}", "commit": None,
              "published_at": None, "prerelease": False,
              "template_bundle": None, "notes": ""},
         ]}), encoding="utf-8")
@@ -323,8 +331,9 @@ def test_upgrade_check_lists_versions(tmp_path, capsys):
                "--template-dir", str(src)])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "1.0.1" in out and "patch" in out
-    assert "1.1.0" in out and "minor" in out
+    patch_v, minor_v = _next_versions()
+    assert patch_v in out and "patch" in out
+    assert minor_v in out and "minor" in out
 
 
 def test_upgrade_check_source_failure_is_not_latest(tmp_path, capsys):
@@ -361,7 +370,8 @@ def test_upgrade_dry_run_does_not_touch_worktree(tmp_path, capsys):
     for f in proj.rglob("*"):
         if f.is_file():
             before[str(f)] = hashlib.sha256(f.read_bytes()).hexdigest()
-    rc = main(["upgrade", "--dry-run", "--to", "1.0.1", "--path", str(proj),
+    patch_v, _ = _next_versions()
+    rc = main(["upgrade", "--dry-run", "--to", patch_v, "--path", str(proj),
                "--template-dir", str(src)])
     assert rc == 0
     for f in proj.rglob("*"):
@@ -396,3 +406,91 @@ def test_upgrade_help_lists_all_contract_flags(capsys):
     for flag in ("--check", "--dry-run", "--to", "--prepare-pr",
                  "--accept-major", "--template-dir", "--yes"):
         assert flag in out, f"{flag} missing from upgrade --help"
+
+
+# ------------------------------------------------- verify --local/--remote ---
+
+
+def _block_network(monkeypatch):
+    """Forbid all network: any socket use raises. Proves --local is offline."""
+    def _boom(*a, **k):
+        raise AssertionError("network call attempted in --local mode")
+
+    monkeypatch.setattr(socket, "socket", _boom)
+    monkeypatch.setattr(socket, "create_connection", _boom)
+    monkeypatch.setattr(socket, "getaddrinfo", _boom)
+
+
+def test_verify_local_remote_mutually_exclusive(tmp_path, monkeypatch, capsys):
+    install_fake_contract(monkeypatch)
+    rc = main(["verify", "--path", str(tmp_path), "--local", "--remote"])
+    assert rc == 1  # UsageError -> exit 1, not argparse's 2
+    assert "mutually exclusive" in capsys.readouterr().err
+
+
+def test_verify_local_makes_zero_network_calls(tmp_path, monkeypatch, capsys):
+    install_fake_contract(monkeypatch)
+    _block_network(monkeypatch)
+
+    def _must_not_run(*a, **k):
+        raise AssertionError("_remote_dimension must not run under --local")
+
+    monkeypatch.setattr(cli_main, "_remote_dimension", _must_not_run)
+    rc = main(["verify", "--path", str(tmp_path), "--local"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "LOCAL_ONLY" in out
+    assert "local-only" in out
+
+
+def test_verify_local_never_claims_enforced(tmp_path, monkeypatch, capsys):
+    install_fake_contract(monkeypatch)
+    _block_network(monkeypatch)
+    rc = main(["verify", "--path", str(tmp_path), "--local"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    remote_line = next(l for l in out.splitlines()
+                       if l.strip().startswith("remote_enforcement:"))
+    assert "unverified" in remote_line and "LOCAL_ONLY" in remote_line
+    assert "pass" not in remote_line and "enforced:" not in remote_line
+
+
+def test_verify_local_strict_green_when_local_clean(tmp_path, monkeypatch, capsys):
+    """--local --strict passes on local dimensions; remote is not counted."""
+    install_fake_contract(monkeypatch, enforcement_required=True)
+    _block_network(monkeypatch)
+    rc = main(["verify", "--path", str(tmp_path), "--local", "--strict"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "STRICT" in out and "local" in out.lower()
+
+
+def test_verify_local_strict_still_fails_on_drift(tmp_path, monkeypatch, capsys):
+    """--local --strict keeps teeth on local dimensions."""
+    install_fake_contract(monkeypatch, drift="drifted", enforcement_required=True)
+    _block_network(monkeypatch)
+    rc = main(["verify", "--path", str(tmp_path), "--local", "--strict"])
+    assert rc == 2
+    assert "STRICT FAILED" in capsys.readouterr().out
+
+
+def test_verify_no_flag_keeps_v100_behavior(tmp_path, monkeypatch, capsys):
+    """Backward compat: no flag still attempts remote and degrades."""
+    install_fake_contract(monkeypatch)
+    monkeypatch.setattr(cli_main, "_get_check_remote_enforcement",
+                        raise_import_error)
+    rc = main(["verify", "--path", str(tmp_path)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "REMOTE_NOT_CHECKED" in out
+    assert "LOCAL_ONLY" not in out
+
+
+def test_verify_remote_flag_attempts_remote(tmp_path, monkeypatch, capsys):
+    """--remote explicitly requests the v1.0.0 remote attempt path."""
+    install_fake_contract(monkeypatch)
+    monkeypatch.setattr(cli_main, "_get_check_remote_enforcement",
+                        raise_import_error)
+    rc = main(["verify", "--path", str(tmp_path), "--remote"])
+    assert rc == 0
+    assert "REMOTE_NOT_CHECKED" in capsys.readouterr().out

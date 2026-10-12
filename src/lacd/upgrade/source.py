@@ -36,6 +36,91 @@ _BUNDLE_SHA_LINE_RE = re.compile(
 )
 # Fenced JSON block in release notes carrying {"template_bundle": {...}}.
 _JSON_FENCE_RE = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
+# Bare 64-hex sha256 outside any structure (single-asset fallback only).
+_BARE_HEX_RE = re.compile(r"(?<![0-9a-fA-F])([0-9a-fA-F]{64})(?![0-9a-fA-F])")
+
+
+def _ok_sha(value: Any) -> str | None:
+    """Validate a sha256 value: 64 hex chars, normalized to lowercase."""
+    if isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{64}", value.strip()):
+        return value.strip().lower()
+    return None
+
+
+def _bundle_assets(entry: dict) -> list[dict]:
+    """Release assets named lacd-template*.(zip|tar.gz)."""
+    out: list[dict] = []
+    for asset in entry.get("assets") or []:
+        if not isinstance(asset, dict):
+            continue
+        name = asset.get("name") or ""
+        if name.startswith("lacd-template") and name.endswith((".zip", ".tar.gz")):
+            out.append(asset)
+    return out
+
+
+def _strip_fenced_regions(body: str) -> str:
+    """Remove fenced code regions, closed or unclosed.
+
+    A sha256 inside a broken/incomplete block is not trustworthy prose,
+    so fenced regions are excluded from the single-asset fallback scan.
+    An unclosed fence swallows everything after it (fail-closed).
+    """
+    prose = re.sub(r"```.*?```", "", body, flags=re.DOTALL)
+    prose = re.sub(r"```.*$", "", prose, flags=re.DOTALL)
+    return prose
+
+
+def parse_template_bundle(release: dict) -> dict | None:
+    """Resolve {"url", "sha256"} for a GitHub release dict.
+
+    Tries three formats in order; all fail-closed:
+    (a) a CLOSED ```json fence carrying
+        {"template_bundle": {"url": ..., "sha256": <64hex>}};
+    (b) a "Template-Bundle-SHA256: <64hex>" line plus exactly one
+        lacd-template*.(zip|tar.gz) asset in the same release;
+    (c) fallback: exactly one lacd-template*.(zip|tar.gz) asset and a bare
+        64-hex sha256 in the body prose (fenced regions excluded).
+
+    Returns None when no trustworthy sha256 is found. Callers must refuse
+    to download when this returns None. A sha256 that is not 64 hex is
+    never returned.
+    """
+    if not isinstance(release, dict):
+        return None
+    body = release.get("body") or ""
+    assets = _bundle_assets(release)
+
+    # (a) closed JSON fence wins.
+    for match in _JSON_FENCE_RE.finditer(body):
+        try:
+            payload = json.loads(match.group(1))
+        except (ValueError, json.JSONDecodeError):
+            continue
+        tb = payload.get("template_bundle") if isinstance(payload, dict) else None
+        if not isinstance(tb, dict):
+            continue
+        sha = _ok_sha(tb.get("sha256"))
+        url = tb.get("url")
+        if sha and isinstance(url, str) and url:
+            return {"url": url, "sha256": sha}
+
+    # (b) sha256 line + exactly one asset.
+    sha_match = _BUNDLE_SHA_LINE_RE.search(body)
+    if sha_match and len(assets) == 1:
+        url = assets[0].get("browser_download_url")
+        if isinstance(url, str) and url:
+            return {"url": url, "sha256": sha_match.group(1).lower()}
+
+    # (c) single-asset fallback: bare 64-hex in prose (fences excluded).
+    if len(assets) == 1:
+        hex_match = _BARE_HEX_RE.search(_strip_fenced_regions(body))
+        if hex_match:
+            url = assets[0].get("browser_download_url")
+            if isinstance(url, str) and url:
+                return {"url": url, "sha256": hex_match.group(1).lower()}
+
+    return None
 
 
 class SourceUnavailable(Exception):
@@ -113,6 +198,12 @@ class UpgradeSource(ABC):
 
 def _parse_template_bundle(entry: dict) -> dict | None:
     """Resolve {"url", "sha256"} for a GitHub release entry.
+
+    LEGACY (v1.0.0): kept unchanged for internal compatibility.
+    New code should use parse_template_bundle(), which additionally
+    supports the single-asset fallback and treats unclosed fences as
+    untrustworthy. This legacy variant implements only formats (a) and
+    (b) above.
 
     Convention (documented, fail-closed):
     1. A fenced ```json block in the body may carry
@@ -226,7 +317,7 @@ class GitHubReleasesSource(UpgradeSource):
                     commit=None,  # the releases list API carries no tag commit
                     published_at=entry.get("published_at"),
                     prerelease=bool(entry.get("prerelease", False)),
-                    template_bundle=_parse_template_bundle(entry),
+                    template_bundle=parse_template_bundle(entry),
                     notes=entry.get("body") or "",
                 )
             )

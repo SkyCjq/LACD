@@ -1,0 +1,10 @@
+{
+  "tag_name": "v1.0.0",
+  "body": "## LACD v1.0.0 — first public release\r\n\r\nIndependent, generic, business-agnostic governance framework for agentic software development.\r\n\r\n**Added**\r\n- CLI (`lacd`): `init` / `doctor` / `status` (+`--json`) / `verify` (`--strict`, `--evidence`) / `upgrade` (`--check`, `--dry-run`, `--to`, `--prepare-pr`, `--accept-major`, `--template-dir`, `--yes`)\r\n- Adoption state machine (7 states, 4 dimensions, reason codes), schema-validated status JSON\r\n- Version lock (`.lacd/lock.json`), trusted-source discovery, SemVer compatibility policy\r\n- Upgrade engine: 3-way migration, marked-section merge, conflict refusal, backup + rollback, idempotent re-runs\r\n- `upgrade --prepare-pr`: branch + PR, dedupe, evidence-bound, never auto-merges\r\n- T0/T1/T2 risk classification; agent protocol; remote-enforcement check (fail-closed)\r\n- Tests: 301 passed (AT-01..AT-25, e2e, security negatives), coverage 88%\r\n\r\n**Install**: `pip install \"git+https://github.com/SkyCjq/LACD.git@v1.0.0\"` (Python 3.11+, deps: pyyaml, jsonschema)\r\n\r\n## Template bundle\r\n\r\n`lacd-templates-1.0.0.zip` — SHA-256 verified by `lacd upgrade` before use:\r\n\r\n```json\r\n{\"template_bundle\": {\"url\": \"https://github.com/SkyCjq/LACD/releases/download/v1.0.0/lacd-templates-1.0.0.zip\", \"sha256\": \"e7f5a2ad8c57104b67653c9785622ec67b051020091deb98e4e5eb229682baad\"}}\r\n",
+  "assets": [
+    {
+      "name": "lacd-templates-1.0.0.zip",
+      "browser_download_url": "https://github.com/SkyCjq/LACD/releases/download/v1.0.0/lacd-templates-1.0.0.zip"
+    }
+  ]
+}
