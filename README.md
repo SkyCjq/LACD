@@ -14,6 +14,8 @@ server, no SaaS, no telemetry, no business-project coupling.
 > Tag / GitHub Release / branch protection remain Human actions (see
 > [docs/operations/human-approval.md](docs/operations/human-approval.md)).
 
+<img width="1774" height="887" alt="LACD Workflow Infographic Poster" src="https://github.com/user-attachments/assets/bfce422c-7890-4050-92fc-f9467f708668" />
+
 ## What LACD does
 
 - **Verifiable adoption**: `lacd init` declares intent in `lacd.yaml`;
