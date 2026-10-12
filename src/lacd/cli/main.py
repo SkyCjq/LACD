@@ -649,19 +649,21 @@ def _get_required_checks(project_dir: Path) -> tuple[list, list]:
     checks: list = []
 
     # 1. lacd.yaml governance.required_checks
-    yaml_path = project_dir / "lacd.yaml"
-    if yaml_path.exists():
-        try:
-            from lacd.config.schema import load_config
-            cfg = load_config(str(project_dir))
-            gov = getattr(cfg, "governance", None)
-            if gov is not None:
-                yaml_checks = getattr(gov, "required_checks", None)
-                if yaml_checks:
-                    checks = [c for c in yaml_checks if isinstance(c, str) and c]
-        except Exception:
-            return [], ["POLICY_CONFIG_UNPARSEABLE"]
-    # else: no yaml file -> checks stays [], no warning (will downgrade via REQUIRED_CHECKS_UNCONFIGURED)
+    # NOTE: try load_config directly (not exists() check) so tests can mock it.
+    # ConfigNotFound -> no yaml, treat as empty (no warning).
+    # ConfigInvalid -> bad yaml, POLICY_CONFIG_UNPARSEABLE.
+    try:
+        from lacd.config.schema import load_config, ConfigNotFound
+        cfg = load_config(str(project_dir))
+        gov = getattr(cfg, "governance", None)
+        if gov is not None:
+            yaml_checks = getattr(gov, "required_checks", None)
+            if yaml_checks:
+                checks = [c for c in yaml_checks if isinstance(c, str) and c]
+    except ConfigNotFound:
+        pass  # no lacd.yaml -> checks stays [], no warning
+    except Exception:
+        return [], ["POLICY_CONFIG_UNPARSEABLE"]
 
     # 2. Fall back to lock.json (D2 v2)
     if not checks:
