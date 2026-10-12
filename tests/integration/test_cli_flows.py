@@ -389,7 +389,7 @@ def test_flow_strict_passes_when_remote_enforced(git_project, monkeypatch, capsy
     monkeypatch.setattr(cli_main, "_get_check_remote_enforcement",
                         lambda: fake_check)
     monkeypatch.setattr(cli_main, "_check_config_trust",
-                        lambda project_dir: ("a" * 40, [], None))
+                        lambda project_dir: ("a" * 40, ["TRUSTED_BASE_FROM_ENV"], None))
     monkeypatch.setattr(cli_main, "_get_trusted_required_checks",
                         lambda project_dir, sha: (["ci-check"], []))
     assert main(["verify", "--path", str(p), "--strict"]) == 0

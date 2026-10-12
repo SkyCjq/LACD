@@ -199,3 +199,73 @@ def test_sec_r5_03_env_sha_preferred_over_local_ref(tmp_path, monkeypatch):
     assert err2 is None
     assert sha2 == real_sha
     assert "TRUSTED_BASE_FROM_ENV" in warnings2
+
+
+def test_sec_r6_01_tampered_local_ref_never_enforced(tmp_path, monkeypatch):
+    """SEC-R6-01: without LACD_TRUSTED_BASE_SHA, tampered origin/main
+    must NEVER yield ENFORCED (downgraded to UNVERIFIED)."""
+    import sys
+    sys.path.insert(0, "src")
+    from lacd.cli import main as cli_main
+
+    repo = _make_repo(tmp_path)
+    # Tamper origin/main to weakened policy
+    _git(repo, "checkout", "-b", "evil")
+    (repo / "lacd.yaml").write_text((repo / "lacd.yaml").read_text().replace(
+        "[ci, security]", "[ci]"))
+    _git(repo, "add", "lacd.yaml")
+    _git(repo, "commit", "-m", "evil weaken")
+    evil_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "update-ref", "refs/remotes/origin/main", evil_sha)
+    _git(repo, "checkout", "main")
+
+    # Ensure NO env var (fallback mode)
+    monkeypatch.delenv("LACD_TRUSTED_BASE_SHA", raising=False)
+
+    remote_called = []
+    def fake_check(repo_url, branch, *, policy=None, token=None, timeout=15):
+        remote_called.append(policy)
+        # Remote "satisfies" the weakened [ci] policy
+        assert policy.required_checks == ["ci"], f"policy was {policy.required_checks}"
+        from lacd.github import remote
+        return remote.EnforcementReport(status="enforced", reasons=["MOCK"], details={})
+
+    monkeypatch.setattr(cli_main, "_get_check_remote_enforcement", lambda: fake_check)
+    monkeypatch.setattr(cli_main, "_detect_repo_branch", lambda p: ("o/r", "main"))
+
+    class _C:
+        @staticmethod
+        def DimensionResult(status, reasons):
+            return (status, list(reasons))
+
+    dim, note = cli_main._remote_dimension(_C(), repo)
+    # Must NOT be enforced (fallback mode is non-security-assurance)
+    assert dim[0] == "unverified", f"SEC-R6-01 BROKEN: got {dim[0]} with tampered ref"
+    assert "UNTRUSTED_BASE_FALLBACK" in dim[1], f"reasons: {dim[1]}"
+
+
+def test_sec_r6_01_env_mode_can_enforce(tmp_path, monkeypatch):
+    """SEC-R6-01 positive: WITH LACD_TRUSTED_BASE_SHA, ENFORCED is allowed."""
+    import sys
+    sys.path.insert(0, "src")
+    from lacd.cli import main as cli_main
+
+    repo = _make_repo(tmp_path)
+    real_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setenv("LACD_TRUSTED_BASE_SHA", real_sha)
+
+    def fake_check(repo_url, branch, *, policy=None, token=None, timeout=15):
+        assert policy.required_checks == ["ci", "security"]
+        from lacd.github import remote
+        return remote.EnforcementReport(status="enforced", reasons=["MOCK"], details={})
+
+    monkeypatch.setattr(cli_main, "_get_check_remote_enforcement", lambda: fake_check)
+    monkeypatch.setattr(cli_main, "_detect_repo_branch", lambda p: ("o/r", "main"))
+
+    class _C:
+        @staticmethod
+        def DimensionResult(status, reasons):
+            return (status, list(reasons))
+
+    dim, note = cli_main._remote_dimension(_C(), repo)
+    assert dim[0] == "enforced", f"trusted env mode should allow enforced, got {dim}"

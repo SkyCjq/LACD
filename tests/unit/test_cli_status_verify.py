@@ -200,7 +200,7 @@ def test_verify_strict_all_green_with_enforced_remote_exits_0(
     monkeypatch.setattr(cli_main, "_detect_repo_branch",
                         lambda project_dir: ("example/repo", "main"))
     monkeypatch.setattr(cli_main, "_check_config_trust",
-                        lambda project_dir: ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", [], None))
+                        lambda project_dir: ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ["TRUSTED_BASE_FROM_ENV"], None))
     monkeypatch.setattr(cli_main, "_get_trusted_required_checks",
                         lambda project_dir, sha: (["ci-check"], []))
     rc = main(["verify", "--path", str(tmp_path), "--strict"])
@@ -220,7 +220,7 @@ def test_verify_strict_remote_not_enforced_exits_2(tmp_path, monkeypatch, capsys
     monkeypatch.setattr(cli_main, "_detect_repo_branch",
                         lambda project_dir: ("example/repo", "main"))
     monkeypatch.setattr(cli_main, "_check_config_trust",
-                        lambda project_dir: ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", [], None))
+                        lambda project_dir: ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ["TRUSTED_BASE_FROM_ENV"], None))
     monkeypatch.setattr(cli_main, "_get_trusted_required_checks",
                         lambda project_dir, sha: (["ci-check"], []))
     rc = main(["verify", "--path", str(tmp_path), "--strict"])
@@ -526,7 +526,7 @@ def test_remote_dimension_never_passes_policy_none(tmp_path, monkeypatch):
     monkeypatch.setattr(cli_main, "_detect_repo_branch",
                         lambda project_dir: ("example/repo", "main"))
     monkeypatch.setattr(cli_main, "_check_config_trust",
-                        lambda project_dir: ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", [], None))
+                        lambda project_dir: ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ["TRUSTED_BASE_FROM_ENV"], None))
     monkeypatch.setattr(cli_main, "_get_trusted_required_checks",
                         lambda project_dir, sha: (["ci-check", "lint"], []))
 
@@ -561,7 +561,7 @@ def test_remote_dimension_empty_required_checks_is_unverified(tmp_path, monkeypa
     monkeypatch.setattr(cli_main, "_detect_repo_branch",
                         lambda project_dir: ("example/repo", "main"))
     monkeypatch.setattr(cli_main, "_check_config_trust",
-                        lambda project_dir: ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", [], None))
+                        lambda project_dir: ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ["TRUSTED_BASE_FROM_ENV"], None))
     monkeypatch.setattr(cli_main, "_get_trusted_required_checks",
                         lambda project_dir, sha: ([], []))
 
@@ -585,7 +585,7 @@ def test_remote_dimension_empty_checks_keeps_unverified(tmp_path, monkeypatch):
     monkeypatch.setattr(cli_main, "_detect_repo_branch",
                         lambda project_dir: ("example/repo", "main"))
     monkeypatch.setattr(cli_main, "_check_config_trust",
-                        lambda project_dir: ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", [], None))
+                        lambda project_dir: ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ["TRUSTED_BASE_FROM_ENV"], None))
     monkeypatch.setattr(cli_main, "_get_trusted_required_checks",
                         lambda project_dir, sha: ([], []))
 

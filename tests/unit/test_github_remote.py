@@ -488,7 +488,7 @@ def test_remote_dimension_never_calls_with_policy_none(monkeypatch, tmp_path):
     monkeypatch.setattr(cli_main, "_detect_repo_branch",
                         lambda p: ("octo/hello", "main"))
     monkeypatch.setattr(cli_main, "_check_config_trust",
-                        lambda p: ("a" * 40, [], None))
+                        lambda p: ("a" * 40, ["TRUSTED_BASE_FROM_ENV"], None))
     monkeypatch.setattr(cli_main, "_get_trusted_required_checks",
                         lambda p, sha: (["ci"], []))
 

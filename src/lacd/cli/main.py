@@ -972,6 +972,16 @@ def _remote_dimension(contract, project_dir: Path):
                     reasons=["REQUIRED_CHECKS_UNCONFIGURED"] + all_warnings + list(rep.reasons)),
                 "no required checks configured for this project; remote "
                 "enforcement cannot be verified (fail-closed)")
+    # SEC-R6-01: local fallback (no LACD_TRUSTED_BASE_SHA) is non-security-assurance
+    # mode. It can report NOT_ENFORCED or UNVERIFIED, but NEVER ENFORCED, because
+    # local origin/main can be moved by anyone with git write access.
+    _trusted_mode = "TRUSTED_BASE_FROM_ENV" in all_warnings
+    if not _trusted_mode and rep.status == "enforced":
+        return (contract.DimensionResult(
+                    status="unverified",
+                    reasons=["UNTRUSTED_BASE_FALLBACK"] + all_warnings + list(rep.reasons)),
+                "trusted base from local origin/main (not externally verified); "
+                "cannot assert ENFORCED in non-security-assurance mode (fail-closed)")
     # Propagate warnings (trusted base SHA is in all_warnings via trust resolution)
     all_reasons = all_warnings + list(rep.reasons)
     return (contract.DimensionResult(status=rep.status,
