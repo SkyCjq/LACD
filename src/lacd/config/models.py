@@ -24,6 +24,7 @@ class GovernanceSection:
     pull_request_required: bool
     human_merge_required: bool
     risk_tiers: list[str] = field(default_factory=list)
+    required_checks: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -70,6 +71,7 @@ class LacdConfig:
                 pull_request_required=d["governance"]["pull_request_required"],
                 human_merge_required=d["governance"]["human_merge_required"],
                 risk_tiers=list(d["governance"]["risk_tiers"]),
+                required_checks=list(d["governance"].get("required_checks", [])),
             ),
             verification=VerificationSection(
                 bind_to_commit_sha=d["verification"]["bind_to_commit_sha"],

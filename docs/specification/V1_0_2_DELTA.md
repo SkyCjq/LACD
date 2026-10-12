@@ -122,7 +122,7 @@
 | RRC-1 | 合并 SHA | `git rev-parse main` == PR merge SHA；与 Q2 的 HEAD 比对 |
 | RRC-2 | CI | 该 SHA 的 3.11/3.12 runs 均为 success；job 名匹配 |
 | RRC-3 | Required Checks | 管理员确认或只读 API 证实生效；不可读 → HOLD |
-| RRC-4 | Q2 记录 | `reviewed_head_sha` == 合并 SHA（或其直接前身且无实质差异） |
+| RRC-4 | Q2 记录 | `reviewed_head_sha` == 合并 SHA（精确相等，无例外） |
 | RRC-5 | 制品摘要 | wheel/zip/manifest 的 SHA256 互相对应；与构建日志一致 |
 | RRC-6 | Release notes | 可被 `parse_template_bundle` 解析（测试验证） |
 
@@ -147,8 +147,9 @@
 - README（EN/ZH）、`llms.txt`、`CHANGELOG`：候选期标 `(unreleased)`；
   发布后按 Human 批准更新。
 - **D5 更新触发重验**（回应 Q1 A6）：若发布后文档更新产生新提交，
-  且该提交进入 main，则下一次 RRC/PRV 必须覆盖；纯文档提交不触发
-  Q2 重审（无代码行为变化），但 PRV 的"文档一致性"项需更新。
+  且该提交进入 main，则下一次 RRC/PRV 必须覆盖。**纯文档提交同样触发
+  Q2 过期**（任何 HEAD 变化 → 重审，无例外）；但重审可为快速确认
+  （scope 限于文档），PRV 的"文档一致性"项需更新。
 
 ### PRV 定义补全（回应 Q1 S4/A4）
 

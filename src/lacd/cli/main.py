@@ -636,27 +636,58 @@ def _detect_repo_branch(project_dir: Path) -> tuple[str | None, str | None]:
     return repo, branch
 
 
-def _get_required_checks(project_dir: Path) -> list:
-    """Return configured required check names for the enforcement policy.
+def _get_required_checks(project_dir: Path) -> tuple[list, list]:
+    """Return (checks, warnings) for the enforcement policy.
 
-    Reads the project's validated ``lacd.yaml`` governance section in a
-    forward-compatible way. The v1 schema has no ``required_checks`` field,
-    so this returns [] for v1 configs — the caller then degrades to
-    UNVERIFIED rather than risking a false ENFORCED (fail-closed).
+    Source priority (D2 v2): ``lacd.yaml`` governance.required_checks >
+    ``.lacd/lock.json`` required_checks > empty (fail-closed).
+
+    Parse errors -> ([], ["POLICY_CONFIG_UNPARSEABLE"]).
+    Duplicates removed with "DUPLICATE_CHECKS_REMOVED" warning.
     """
-    try:
-        from lacd.config.schema import load_config
-        cfg = load_config(project_dir)
-    except Exception:
-        return []
-    gov = getattr(cfg, "governance", None)
-    if gov is None:
-        return []
-    # Forward-compatible: v1 GovernanceSection has no required_checks attr.
-    checks = getattr(gov, "required_checks", None)
+    warnings: list = []
+    checks: list = []
+
+    # 1. lacd.yaml governance.required_checks
+    yaml_path = project_dir / "lacd.yaml"
+    if yaml_path.exists():
+        try:
+            from lacd.config.schema import load_config
+            cfg = load_config(str(project_dir))
+            gov = getattr(cfg, "governance", None)
+            if gov is not None:
+                yaml_checks = getattr(gov, "required_checks", None)
+                if yaml_checks:
+                    checks = [c for c in yaml_checks if isinstance(c, str) and c]
+        except Exception:
+            return [], ["POLICY_CONFIG_UNPARSEABLE"]
+    # else: no yaml file -> checks stays [], no warning (will downgrade via REQUIRED_CHECKS_UNCONFIGURED)
+
+    # 2. Fall back to lock.json (D2 v2)
     if not checks:
-        return []
-    return [c for c in checks if isinstance(c, str) and c]
+        try:
+            lock_path = project_dir / ".lacd" / "lock.json"
+            if lock_path.exists():
+                import json
+                lock = json.loads(lock_path.read_text(encoding="utf-8"))
+                lock_checks = lock.get("required_checks") or \
+                             (lock.get("governance") or {}).get("required_checks")
+                if lock_checks:
+                    checks = [c for c in lock_checks if isinstance(c, str) and c]
+        except Exception:
+            return [], ["POLICY_CONFIG_UNPARSEABLE"]
+
+    # 3. Deduplicate
+    seen = set()
+    deduped = []
+    for c in checks:
+        if c not in seen:
+            seen.add(c)
+            deduped.append(c)
+        elif "DUPLICATE_CHECKS_REMOVED" not in warnings:
+            warnings.append("DUPLICATE_CHECKS_REMOVED")
+
+    return deduped, warnings
 
 
 def _remote_dimension(contract, project_dir: Path):
@@ -686,7 +717,7 @@ def _remote_dimension(contract, project_dir: Path):
                                           reasons=["NO_GITHUB_REMOTE"]),
                 "no git origin remote pointing at GitHub; remote enforcement "
                 "cannot be checked")
-    required_checks = _get_required_checks(project_dir)
+    required_checks, check_warnings = _get_required_checks(project_dir)
     from lacd.github.remote import EnforcementPolicy
     policy = EnforcementPolicy(
         policy_version="1",
@@ -707,11 +738,13 @@ def _remote_dimension(contract, project_dir: Path):
     if not required_checks and rep.status == "enforced":
         return (contract.DimensionResult(
                     status="unverified",
-                    reasons=["REQUIRED_CHECKS_UNCONFIGURED"] + list(rep.reasons)),
+                    reasons=["REQUIRED_CHECKS_UNCONFIGURED"] + check_warnings + list(rep.reasons)),
                 "no required checks configured for this project; remote "
                 "enforcement cannot be verified (fail-closed)")
+    # Propagate config warnings even when checks are present
+    all_reasons = check_warnings + list(rep.reasons)
     return (contract.DimensionResult(status=rep.status,
-                                      reasons=list(rep.reasons)),
+                                      reasons=all_reasons),
             None)
 
 

@@ -8,7 +8,7 @@
 
 1. **Q2** = 独立 Web AI 对 PR 最终稳定 HEAD 的审查，Human 合并前。
    凭据：reviewer/模型、时间、`reviewed_head_sha`、原始结论（`PASS/FAIL/HOLD`）。
-   HEAD 实质变化 → 过期重审。
+   **任何** HEAD 变化 → 过期重审（无"实质"例外）。
 2. **RRC** = 合并后、Tag 前的制品/治理资格核验（脚本+手册），不是第二次审查。
    RRC 只核验**预期**（合并 SHA、制品就绪、notes 草稿可解析），不核验 tag 本身
    （尚不存在）。

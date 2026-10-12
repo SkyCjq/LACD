@@ -586,7 +586,7 @@ def test_remote_dimension_empty_checks_keeps_unverified(tmp_path, monkeypatch):
 
 def test_get_required_checks_empty_when_no_config(tmp_path):
     """v1 schema has no required_checks field -> [] (conservative)."""
-    assert cli_main._get_required_checks(tmp_path) == []
+    assert cli_main._get_required_checks(tmp_path) == ([], [])
 
 
 def test_get_required_checks_ignores_non_string_entries(tmp_path, monkeypatch):
@@ -594,4 +594,54 @@ def test_get_required_checks_ignores_non_string_entries(tmp_path, monkeypatch):
     fake_gov = _ns(required_checks=["ok-check", 123, None, ""])
     fake_cfg = _ns(governance=fake_gov)
     monkeypatch.setattr("lacd.config.schema.load_config", lambda p: fake_cfg)
-    assert cli_main._get_required_checks(tmp_path) == ["ok-check"]
+    assert cli_main._get_required_checks(tmp_path) == (["ok-check"], [])
+
+
+def test_get_required_checks_real_yaml_chain(tmp_path):
+    """Q2: real lacd.yaml -> required_checks without mocks (except load_config).
+
+    Proves a legitimate project CAN configure required_checks via yaml.
+    """
+    import yaml
+    config = {
+        "schema_version": "1",
+        "lacd": {"enabled": True, "mode": "lacd", "policy_version": "1"},
+        "governance": {
+            "pull_request_required": True,
+            "human_merge_required": True,
+            "risk_tiers": ["T0"],
+            "required_checks": ["ci-build", "ci-test"],
+        },
+        "verification": {"bind_to_commit_sha": True, "fail_closed": True,
+                         "github_enforcement_required": True},
+        "agents": {"protocol": "lacd", "auto_detect": True},
+        "project": {"extensions": ".lacd/project-rules.yaml"},
+    }
+    (tmp_path / "lacd.yaml").write_text(yaml.safe_dump(config))
+    checks, warnings = cli_main._get_required_checks(tmp_path)
+    assert checks == ["ci-build", "ci-test"], f"got {checks}"
+    assert warnings == []
+
+
+def test_get_required_checks_lock_fallback(tmp_path):
+    """Q2: lock.json fallback works when yaml has no required_checks."""
+    import yaml, json
+    config = {
+        "schema_version": "1",
+        "lacd": {"enabled": True, "mode": "lacd", "policy_version": "1"},
+        "governance": {
+            "pull_request_required": True,
+            "human_merge_required": True,
+            "risk_tiers": ["T0"],
+        },
+        "verification": {"bind_to_commit_sha": True, "fail_closed": True,
+                         "github_enforcement_required": True},
+        "agents": {"protocol": "lacd", "auto_detect": True},
+        "project": {"extensions": ".lacd/project-rules.yaml"},
+    }
+    (tmp_path / "lacd.yaml").write_text(yaml.safe_dump(config))
+    (tmp_path / ".lacd").mkdir()
+    (tmp_path / ".lacd" / "lock.json").write_text(
+        json.dumps({"required_checks": ["lock-ci"]}))
+    checks, warnings = cli_main._get_required_checks(tmp_path)
+    assert checks == ["lock-ci"], f"got {checks}"

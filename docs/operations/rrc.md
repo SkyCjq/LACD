@@ -38,8 +38,8 @@ gh api /repos/SkyCjq/LACD/branches/main --jq '.commit.sha'
 ```bash
 # 2. 合并 SHA 的 CI run（注意：看 merge commit 的 run，不是 PR 分支旧 run）
 gh api "/repos/SkyCjq/LACD/actions/runs?per_page=5" \
-  --jq '.workflow_runs[] | {sha: .head_sha[0:8], event, status, conclusion}'
-# 断言：head_sha == MERGE_SHA 的 run，status == completed，conclusion == success
+  --jq '.workflow_runs[] | {sha: .head_sha, event, status, conclusion}'
+# 断言：head_sha == MERGE_SHA（完整 40 位）的 run，status == completed，conclusion == success
 ```
 
 | 结果 | 条件 |
@@ -83,20 +83,33 @@ gh api /repos/SkyCjq/LACD/branches/main/protection/required_status_checks
 
 ```bash
 # 4. 从 MERGE_SHA 构建 wheel，断言模板/版本一致
-git clone https://github.com/SkyCjq/LACD.git rrc-build && cd rrc-build
+rm -rf rrc-build /tmp/rrc-wheel && mkdir -p /tmp/rrc-wheel
+git clone https://github.com/SkyCjq/LACD.git rrc-build
+cd rrc-build
 git checkout <MERGE_SHA_FULL>
 pip wheel --no-deps . -w /tmp/rrc-wheel
 python3 - <<'EOF'
 import zipfile, glob, json, hashlib
-whl = glob.glob("/tmp/rrc-wheel/*.whl")[0]
-names = zipfile.ZipFile(whl).namelist()
+whls = glob.glob("/tmp/rrc-wheel/*.whl")
+assert len(whls) == 1, f"expected 1 wheel, got {len(whls)}"
+whl = whls[0]
+z = zipfile.ZipFile(whl)
+names = z.namelist()
 assert any("templates/workflows" in n for n in names), "wheel 缺 templates"
 assert any("manifest.json" in n for n in names), "wheel 缺 manifest"
-print("wheel OK:", whl)
+# 验证内容与源码一致
+manifest = json.loads(z.read([n for n in names if n.endswith("templates/manifest.json")][0]))
+src_manifest = json.load(open("src/lacd/templates/manifest.json"))
+assert manifest["template_version"] == src_manifest["template_version"]
+for f in manifest["files"]:
+    wp = [n for n in names if n.endswith(f["path"])][0]
+    assert hashlib.sha256(z.read(wp)).hexdigest() == f["sha256"], f["path"]
+print("wheel OK:", whl, "| 内容与源码一致")
 EOF
 
 # 5. 构建模板包，计算 sha256（此值将用于 Release notes）
-cd rrc-build && python3 - <<'EOF'
+# 已在 rrc-build 目录，无需重复 cd
+python3 - <<'EOF'
 import zipfile, os, hashlib, json
 tpl = "src/lacd/templates"
 man = json.load(open(f"{tpl}/manifest.json"))

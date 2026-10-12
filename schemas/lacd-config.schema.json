@@ -32,6 +32,13 @@
         "pull_request_required": {
           "type": "boolean"
         },
+        "required_checks": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        },
         "risk_tiers": {
           "items": {
             "minLength": 1,

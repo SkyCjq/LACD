@@ -8,7 +8,6 @@
 | tag `v1.0.1` → `56dcfd2e` | `GET /git/refs/tags/v1.0.1` | VERIFIED |
 | Release v1.0.1 已发布 | 非草稿；bundle sha256 `a01c9e4f…e7e7ec51`；notes 含闭合 JSON + SHA 行（08:46 UTC 修订） | VERIFIED |
 | CI | 3.11/3.12 各 `370 passed, 1 skipped`，覆盖率 89.06% | VERIFIED |
-| 采用者仓 `main` | `4219961c2640`，`protected:true`（只读，未动） | VERIFIED |
 
 ## P0 缺陷复现
 
@@ -26,5 +25,5 @@
 
 ## 权限边界
 
-- PAT：LACD 可写（除 workflows/）；protection 明细 403；采用者仓只读。
+- PAT：LACD 可写（除 workflows/）；protection 明细 403。
 - Q2 独立审查：优先浏览器 Web AI（授权交互），Cloudflare/验证即停，转 Human 手工中继。
