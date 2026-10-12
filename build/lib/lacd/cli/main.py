@@ -1,0 +1,1142 @@
+"""LACD command-line interface.
+
+Implements the CLI contract in docs/architecture/MODULE_CONTRACT.md section 3:
+subcommands ``init`` / ``doctor`` / ``status`` / ``verify`` / ``upgrade``.
+
+Exit codes (frozen):
+    0  success
+    1  usage / general error
+    2  verification failure (incl. ``--strict`` key dimensions, evidence SHA mismatch)
+    3  upgrade rejected (major not accepted, conflict, security policy)
+
+Sibling modules owned by other agents are imported lazily through
+:func:`_contract` so that this CLI always calls the frozen contract
+signatures (``core.state.compute_state``, ``core.report.build_status_dict`` /
+``validate_status_dict``, ``config.schema.load_config``) instead of
+re-implementing them.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+from types import SimpleNamespace
+
+from lacd import __version__
+
+TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
+
+DEFAULT_UPSTREAM_REPO = "SkyCjq/LACD"
+AGENTS_SECTION_ID = "lacd-agent-protocol"
+AGENTS_BEGIN_RE = re.compile(
+    r'<!-- LACD:MANAGED:BEGIN section="lacd-agent-protocol"[^>]*-->'
+    r".*?"
+    r"<!-- LACD:MANAGED:END -->",
+    re.DOTALL,
+)
+
+MANAGED_WORKFLOW_PATH = ".github/workflows/lacd-verify.yml"
+MANAGED_WORKFLOW_TEMPLATE = "workflows/lacd-verify.yml"
+AGENTS_SECTION_TEMPLATE = "managed/agents-md.section.md"
+PROJECT_RULES_PATH = ".lacd/project-rules.yaml"
+PROJECT_RULES_TEMPLATE = "project-rules.template.yaml"
+LOCK_PATH = ".lacd/lock.json"
+CONFIG_PATH = "lacd.yaml"
+AGENTS_MD_PATH = "AGENTS.md"
+
+
+# ---------------------------------------------------------------------------
+# Errors / parser
+# ---------------------------------------------------------------------------
+
+
+class UsageError(Exception):
+    """Raised for CLI usage errors; mapped to exit code 1."""
+
+
+class _Parser(argparse.ArgumentParser):
+    """ArgumentParser whose usage errors exit 1 (contract), not argparse's 2."""
+
+    def error(self, message: str) -> None:  # noqa: D102
+        raise UsageError(message)
+
+
+# ---------------------------------------------------------------------------
+# Small helpers
+# ---------------------------------------------------------------------------
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _utc_stamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    return _sha256_bytes(path.read_bytes())
+
+
+def _template_bytes(rel: str) -> bytes:
+    return (TEMPLATES_DIR / rel).read_bytes()
+
+
+def _resolve_project_dir(path_str: str | None) -> Path:
+    p = Path(path_str) if path_str else Path(".")
+    return p.expanduser().resolve()
+
+
+def _confined(path: Path, project_dir: Path) -> Path:
+    """Resolve *path* and fail closed if it escapes *project_dir*."""
+    resolved = path.resolve()
+    try:
+        resolved.relative_to(project_dir)
+    except ValueError:
+        raise UsageError(f"refusing path outside project dir: {path}")
+    return resolved
+
+
+def _contract() -> SimpleNamespace:
+    """Lazy import of sibling contract modules (owned by Agent-A).
+
+    Always returns the frozen contract signatures; never re-implements them.
+    """
+    try:
+        from lacd.core.state import DimensionResult, compute_state
+        from lacd.core.report import build_status_dict, validate_status_dict
+        from lacd.config.schema import load_config
+    except ImportError as exc:
+        raise ImportError(
+            "lacd.core / lacd.config modules are not implemented yet "
+            "(owned by Agent-A); status/verify require them"
+        ) from exc
+    return SimpleNamespace(
+        compute_state=compute_state,
+        DimensionResult=DimensionResult,
+        build_status_dict=build_status_dict,
+        validate_status_dict=validate_status_dict,
+        load_config=load_config,
+    )
+
+
+def _get_check_remote_enforcement():
+    """Lazy import of the Agent-D remote-enforcement check."""
+    from lacd.github.remote import check_remote_enforcement
+
+    return check_remote_enforcement
+
+
+def _state_name(state) -> str:
+    return getattr(state, "value", state)
+
+
+# ---------------------------------------------------------------------------
+# init: desired state
+# ---------------------------------------------------------------------------
+
+
+def _default_config_dict() -> dict:
+    # Frozen defaults, MODULE_CONTRACT.md section 2.1.
+    return {
+        "schema_version": "1",
+        "lacd": {
+            "enabled": True,
+            "mode": "lacd",
+            "policy_version": "1",
+            "upstream_repo": DEFAULT_UPSTREAM_REPO,
+        },
+        "governance": {
+            "pull_request_required": True,
+            "human_merge_required": True,
+            "risk_tiers": ["T0", "T1", "T2"],
+        },
+        "verification": {
+            "bind_to_commit_sha": True,
+            "fail_closed": True,
+            "github_enforcement_required": True,
+        },
+        "agents": {"protocol": "lacd", "auto_detect": True},
+        "project": {"extensions": PROJECT_RULES_PATH},
+    }
+
+
+def _canonical_lacd_yaml() -> bytes:
+    import yaml
+
+    header = (
+        "# LACD configuration (schema_version \"1\").\n"
+        "# Created by `lacd init`. See docs/specification/PROTOCOL.md.\n"
+        "# Required keys must not be removed.\n"
+    )
+    body = yaml.safe_dump(
+        _default_config_dict(), sort_keys=False, allow_unicode=True
+    )
+    return (header + body).encode("utf-8")
+
+
+def _build_lock_dict() -> dict:
+    # Frozen lock format, MODULE_CONTRACT.md section 2.2.
+    wf_template = _template_bytes(MANAGED_WORKFLOW_TEMPLATE)
+    # Shared-file hash follows the drift-check definition in
+    # lacd.config.lockfile (Agent-A): exact embedded section text.
+    section_inner = _agents_section_inner().encode("utf-8")
+    return {
+        "lock_format_version": "1",
+        "lacd_cli_version": __version__,
+        "source": {
+            "type": "git-tag",
+            "repo": DEFAULT_UPSTREAM_REPO,
+            "ref": "v" + __version__,
+            # commit is unknown at init time: record null honestly, never invent one.
+            "commit": None,
+        },
+        "schema_version": "1",
+        "policy_version": "1",
+        "template_version": __version__,
+        "managed_files": [
+            {
+                "path": MANAGED_WORKFLOW_PATH,
+                "sha256": _sha256_bytes(wf_template),
+                "template": MANAGED_WORKFLOW_TEMPLATE,
+                "template_version": __version__,
+                "merge": "replace",
+            }
+        ],
+        "shared_files": [
+            {
+                "path": AGENTS_MD_PATH,
+                "section": AGENTS_SECTION_ID,
+                "sha256": _sha256_bytes(section_inner),
+                "template": AGENTS_SECTION_TEMPLATE,
+                "template_version": __version__,
+                "merge": "marked-section",
+            }
+        ],
+        "generated_at": _utc_now_iso(),
+        "generated_by": f"lacd {__version__}",
+    }
+
+
+def _agents_section_inner() -> str:
+    """Exact text embedded between the BEGIN and END markers.
+
+    This is the canonical "section content" whose SHA-256 goes into
+    lock.json ``shared_files`` entries. It matches the drift-check
+    definition in ``lacd.config.lockfile`` (Agent-A): the exact text
+    between the end of the BEGIN marker and the start of the END marker,
+    no trimming or newline normalisation.
+    """
+    body = _template_bytes(AGENTS_SECTION_TEMPLATE).decode("utf-8")
+    if not body.endswith("\n"):
+        body += "\n"
+    return "\n" + body
+
+
+def _agents_block() -> str:
+    begin = (
+        f'<!-- LACD:MANAGED:BEGIN section="{AGENTS_SECTION_ID}" '
+        f'version="{__version__}" -->'
+    )
+    end = "<!-- LACD:MANAGED:END -->"
+    return f"{begin}{_agents_section_inner()}{end}\n"
+
+
+def _agents_section_status(agents_path: Path) -> str:
+    """One of: missing | current | stale | no-markers."""
+    if not agents_path.exists():
+        return "missing"
+    text = agents_path.read_text(encoding="utf-8")
+    m = AGENTS_BEGIN_RE.search(text)
+    if not m:
+        return "no-markers"
+    block = _agents_block()
+    if m.group(0).strip() == block.strip():
+        return "current"
+    return "stale"
+
+
+def _init_is_current(project_dir: Path) -> bool:
+    """True when a previous init already produced exactly the desired state."""
+    lock_path = project_dir / LOCK_PATH
+    if not lock_path.exists():
+        return False
+    try:
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+    if lock.get("template_version") != __version__:
+        return False
+    wf_path = project_dir / MANAGED_WORKFLOW_PATH
+    if not wf_path.exists():
+        return False
+    if _sha256_file(wf_path) != _sha256_bytes(_template_bytes(MANAGED_WORKFLOW_TEMPLATE)):
+        return False
+    if _agents_section_status(project_dir / AGENTS_MD_PATH) != "current":
+        return False
+    if not (project_dir / PROJECT_RULES_PATH).exists():
+        return False
+    return True
+
+
+def _plan_init(project_dir: Path, force: bool) -> list[dict]:
+    """Compute the per-file init plan without writing anything."""
+    plans: list[dict] = []
+
+    cfg_path = project_dir / CONFIG_PATH
+    if cfg_path.exists():
+        if cfg_path.read_bytes() == _canonical_lacd_yaml() and not force:
+            plans.append({"path": CONFIG_PATH, "action": "skip",
+                          "detail": "already matches lacd init defaults"})
+        elif force:
+            plans.append({"path": CONFIG_PATH, "action": "overwrite",
+                          "detail": "existing file backed up first (--force)"})
+        else:
+            plans.append({"path": CONFIG_PATH, "action": "refuse",
+                          "detail": "exists with different content; use --force to overwrite"})
+    else:
+        plans.append({"path": CONFIG_PATH, "action": "create",
+                      "detail": "default lacd.yaml (schema_version 1)"})
+
+    lock_path = project_dir / LOCK_PATH
+    if lock_path.exists() and not force:
+        plans.append({"path": LOCK_PATH, "action": "refresh",
+                      "detail": "rewrite with current CLI/template versions"})
+    else:
+        plans.append({"path": LOCK_PATH, "action": "create",
+                      "detail": f"source git-tag {DEFAULT_UPSTREAM_REPO}@v{__version__}"})
+
+    rules_path = project_dir / PROJECT_RULES_PATH
+    if rules_path.exists():
+        plans.append({"path": PROJECT_RULES_PATH, "action": "skip",
+                      "detail": "project-owned; never overwritten"})
+    else:
+        plans.append({"path": PROJECT_RULES_PATH, "action": "create",
+                      "detail": "empty project-rules template"})
+
+    wf_path = project_dir / MANAGED_WORKFLOW_PATH
+    if wf_path.exists():
+        if _sha256_file(wf_path) == _sha256_bytes(_template_bytes(MANAGED_WORKFLOW_TEMPLATE)):
+            plans.append({"path": MANAGED_WORKFLOW_PATH, "action": "skip",
+                          "detail": "already up to date"})
+        else:
+            plans.append({"path": MANAGED_WORKFLOW_PATH, "action": "update",
+                          "detail": "managed file (merge: replace)"})
+    else:
+        plans.append({"path": MANAGED_WORKFLOW_PATH, "action": "create",
+                      "detail": "managed CI workflow template"})
+
+    agents_path = project_dir / AGENTS_MD_PATH
+    sec = _agents_section_status(agents_path)
+    if sec == "current":
+        plans.append({"path": AGENTS_MD_PATH, "action": "skip",
+                      "detail": "managed section already current"})
+    elif sec == "missing":
+        plans.append({"path": AGENTS_MD_PATH, "action": "create",
+                      "detail": "new file with managed section"})
+    elif sec == "no-markers":
+        plans.append({"path": AGENTS_MD_PATH, "action": "merge-section",
+                      "detail": "append managed section; user content untouched"})
+    else:
+        plans.append({"path": AGENTS_MD_PATH, "action": "merge-section",
+                      "detail": "refresh managed section in place; user content untouched"})
+    return plans
+
+
+def _backup_init(project_dir: Path) -> Path:
+    """Back up pre-existing init-managed files before --force overwrite."""
+    dest = project_dir / ".lacd" / "backup" / f"init-{_utc_stamp()}"
+    for rel in (CONFIG_PATH, LOCK_PATH, PROJECT_RULES_PATH, AGENTS_MD_PATH):
+        src = project_dir / rel
+        if src.exists():
+            target = dest / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, target)
+    return dest
+
+
+def _merge_agents_md(agents_path: Path) -> str:
+    """Create/append/refresh the managed section. Returns the action taken."""
+    block = _agents_block()
+    if not agents_path.exists():
+        agents_path.write_text(block, encoding="utf-8")
+        return "created"
+    text = agents_path.read_text(encoding="utf-8")
+    m = AGENTS_BEGIN_RE.search(text)
+    if m:
+        if m.group(0).strip() == block.strip():
+            return "unchanged"
+        new_text = AGENTS_BEGIN_RE.sub(lambda _m: block.strip(), text, count=1)
+        if not new_text.endswith("\n"):
+            new_text += "\n"
+        agents_path.write_text(new_text, encoding="utf-8")
+        return "updated-section"
+    if text and not text.endswith("\n"):
+        text += "\n"
+    agents_path.write_text(text + "\n" + block, encoding="utf-8")
+    return "appended-section"
+
+
+def _write_text_confined(project_dir: Path, rel: str, data: bytes) -> None:
+    target = _confined(project_dir / rel, project_dir)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    project_dir = _resolve_project_dir(args.path)
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    cfg_path = project_dir / CONFIG_PATH
+    canonical = _canonical_lacd_yaml()
+
+    if cfg_path.exists() and not args.force:
+        if cfg_path.read_bytes() == canonical and _init_is_current(project_dir):
+            print(f"already-initialized: {project_dir}")
+            return 0
+        if cfg_path.read_bytes() != canonical:
+            print(
+                f"error: {CONFIG_PATH} already exists with different content; "
+                "refusing to overwrite (use --force to replace with a backup)",
+                file=sys.stderr,
+            )
+            return 1
+        # Canonical lacd.yaml but the rest is stale/partial: refresh it below.
+
+    plans = _plan_init(project_dir, force=args.force)
+
+    if args.dry_run:
+        print(f"DRY-RUN init for {project_dir}: no files will be written")
+        for p in plans:
+            print(f"  {p['action']:14s} {p['path']}  ({p['detail']})")
+        if args.force and cfg_path.exists():
+            print("  backup          .lacd/backup/init-<timestamp>/  (existing files first)")
+        return 0
+
+    backup_dir = None
+    if args.force and (
+        cfg_path.exists()
+        or (project_dir / LOCK_PATH).exists()
+        or (project_dir / AGENTS_MD_PATH).exists()
+    ):
+        backup_dir = _backup_init(project_dir)
+
+    # 1. lacd.yaml
+    _write_text_confined(project_dir, CONFIG_PATH, canonical)
+    # 2. lock.json
+    _write_text_confined(
+        project_dir, LOCK_PATH,
+        (json.dumps(_build_lock_dict(), indent=2) + "\n").encode("utf-8"),
+    )
+    # 3. project-rules.yaml (only when absent: project-owned)
+    rules_path = project_dir / PROJECT_RULES_PATH
+    if not rules_path.exists():
+        _write_text_confined(
+            project_dir, PROJECT_RULES_PATH, _template_bytes(PROJECT_RULES_TEMPLATE)
+        )
+    # 4. managed workflow (merge: replace)
+    _write_text_confined(
+        project_dir, MANAGED_WORKFLOW_PATH,
+        _template_bytes(MANAGED_WORKFLOW_TEMPLATE),
+    )
+    # 5. AGENTS.md managed section (merge: marked-section; never delete user content)
+    agents_action = _merge_agents_md(project_dir / AGENTS_MD_PATH)
+
+    print(f"initialized LACD {__version__} in {project_dir}")
+    print(f"  wrote {CONFIG_PATH}, {LOCK_PATH}, {MANAGED_WORKFLOW_PATH}")
+    print(f"  AGENTS.md managed section: {agents_action}")
+    if not rules_path.exists():
+        print(f"  wrote {PROJECT_RULES_PATH} (project-owned template)")
+    if backup_dir is not None:
+        print(f"  backup of previous files: {backup_dir}")
+    print("Note: lacd never runs git add/commit/push; review and commit yourself.")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# doctor
+# ---------------------------------------------------------------------------
+
+
+def _check_python() -> tuple[str, str]:
+    v = sys.version_info
+    ok = (v.major, v.minor) >= (3, 11)
+    return ("PASS" if ok else "FAIL",
+            f"python {v.major}.{v.minor}.{v.micro} (>= 3.11 required)")
+
+
+def _check_git() -> tuple[str, str]:
+    if shutil.which("git") is None:
+        return "FAIL", "git not found on PATH"
+    try:
+        out = subprocess.run(
+            ["git", "--version"], capture_output=True, text=True, timeout=10
+        )
+        if out.returncode == 0:
+            return "PASS", out.stdout.strip()
+        return "FAIL", "git --version failed"
+    except (OSError, subprocess.SubprocessError) as exc:
+        return "FAIL", f"git not runnable: {exc}"
+
+
+def _check_gh() -> tuple[str, str]:
+    if shutil.which("gh") is None:
+        return "WARN", "gh CLI not found; remote checks will degrade to unverified"
+    try:
+        out = subprocess.run(
+            ["gh", "--version"], capture_output=True, text=True, timeout=10
+        )
+        first = out.stdout.strip().splitlines()[0] if out.stdout else "gh"
+        return "PASS", first
+    except (OSError, subprocess.SubprocessError) as exc:
+        return "WARN", f"gh not runnable: {exc}"
+
+
+def _check_write(project_dir: Path) -> tuple[str, str]:
+    try:
+        fd, tmp = tempfile.mkstemp(prefix=".lacd-doctor-", dir=str(project_dir))
+        os.close(fd)
+        os.unlink(tmp)
+        return "PASS", f"directory is writable: {project_dir}"
+    except OSError as exc:
+        return "FAIL", f"directory not writable: {exc}"
+
+
+def _check_github_tcp() -> tuple[str, str]:
+    try:
+        with socket.create_connection(("api.github.com", 443), timeout=10):
+            pass
+        return "PASS", "TCP api.github.com:443 reachable (10s timeout)"
+    except OSError as exc:
+        return "WARN", f"api.github.com:443 unreachable ({exc}); remote checks degrade"
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    project_dir = _resolve_project_dir(args.path)
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    checks = [
+        ("python", *_check_python()),
+        ("git", *_check_git()),
+        ("gh", *_check_gh()),
+        ("write-permission", *_check_write(project_dir)),
+        ("github-connectivity", *_check_github_tcp()),
+    ]
+    print(f"lacd doctor for {project_dir}")
+    failed = 0
+    for name, status, detail in checks:
+        print(f"[{status}] {name}: {detail}")
+        if status == "FAIL":
+            failed += 1
+    if failed:
+        print(f"doctor: {failed} failing check(s)")
+        return 1
+    print("doctor: all required checks passed")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# status
+# ---------------------------------------------------------------------------
+
+
+def _fmt_dim(status: str, reasons: list) -> str:
+    if reasons:
+        return f"{status} ({', '.join(str(r) for r in reasons)})"
+    return status
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    project_dir = _resolve_project_dir(args.path)
+    try:
+        contract = _contract()
+    except ImportError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        d = contract.build_status_dict(str(project_dir), remote=None)
+    except Exception as exc:  # fail-closed: never print a fabricated status
+        print(f"error: could not build status: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        errors = contract.validate_status_dict(d)
+        if errors:
+            print("error: built status dict failed schema validation:", file=sys.stderr)
+            for e in errors:
+                print(f"  - {e}", file=sys.stderr)
+            return 1
+        print(json.dumps(d, indent=2, ensure_ascii=False))
+        return 0
+
+    dims = d.get("dimensions", {})
+    vc = d.get("version_consistency", {})
+    head = d.get("head_sha") or "unknown"
+    if isinstance(head, str) and len(head) > 12:
+        head = head[:12]
+    print(f"LACD status for {d.get('project_dir', project_dir)}")
+    print(f"  state: {_state_name(d.get('state'))}")
+    print(f"  cli: {d.get('lacd_cli_version')} | branch: {d.get('branch') or 'unknown'} "
+          f"| head: {head} | mode: {d.get('mode')}")
+    for name in ("local_validation", "remote_enforcement", "drift", "blocking"):
+        dim = dims.get(name, {})
+        print(f"  {name}: {_fmt_dim(dim.get('status', '?'), dim.get('reasons', []))}")
+    print(f"  version_consistency: {vc.get('status')} - {vc.get('detail')}")
+    steps = d.get("next_steps", [])
+    if steps:
+        print("  next_steps:")
+        for s in steps:
+            print(f"    - {s}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# verify
+# ---------------------------------------------------------------------------
+
+
+def _detect_repo_branch(project_dir: Path) -> tuple[str | None, str | None]:
+    """Return (owner/repo, branch) from git, or (None, None) when unavailable."""
+
+    def _run(*git_args: str) -> str | None:
+        try:
+            out = subprocess.run(
+                ["git", "-C", str(project_dir), *git_args],
+                capture_output=True, text=True, timeout=15,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if out.returncode != 0:
+            return None
+        return out.stdout.strip() or None
+
+    branch = _run("rev-parse", "--abbrev-ref", "HEAD")
+    url = _run("remote", "get-url", "origin")
+    repo = None
+    if url:
+        m = re.search(r"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$", url.strip())
+        if m:
+            repo = m.group(1)
+    return repo, branch
+
+
+def _remote_dimension(contract, project_dir: Path):
+    """Compute the remote_enforcement dimension.
+
+    Returns (DimensionResult, note). Never raises for a missing module or a
+    missing repo: those degrade to unverified with a reason code (AT-07).
+    """
+    try:
+        check_remote_enforcement = _get_check_remote_enforcement()
+    except ImportError:
+        dim = contract.DimensionResult(
+            status="unverified", reasons=["REMOTE_NOT_CHECKED"]
+        )
+        note = ("remote check module lacd.github.remote is not implemented yet "
+                "(Agent-D pending); remote dimension degraded to unverified")
+        return dim, note
+    repo, branch = _detect_repo_branch(project_dir)
+    if repo is None:
+        return (contract.DimensionResult(status="unverified",
+                                          reasons=["NO_GITHUB_REMOTE"]),
+                "no git origin remote pointing at GitHub; remote enforcement "
+                "cannot be checked")
+    try:
+        rep = check_remote_enforcement(repo, branch or "main", token=None, timeout=15)
+    except Exception as exc:
+        return (contract.DimensionResult(status="unverified",
+                                          reasons=["REMOTE_NETWORK_ERROR"]),
+                f"remote check raised {type(exc).__name__}: {exc}")
+    return (contract.DimensionResult(status=rep.status,
+                                      reasons=list(rep.reasons)),
+            None)
+
+
+def _check_evidence(args: argparse.Namespace, contract, project_dir: Path) -> int:
+    ev_path = Path(args.evidence)
+    try:
+        raw = ev_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"error: cannot read evidence file {ev_path}: {exc}", file=sys.stderr)
+        return 1
+    try:
+        ev = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        print(f"error: evidence file is not valid JSON: {exc}", file=sys.stderr)
+        return 1
+    ev_sha = ev.get("head_sha") if isinstance(ev, dict) else None
+    if not ev_sha:
+        print("error: evidence file has no head_sha field", file=sys.stderr)
+        return 1
+    try:
+        current = contract.build_status_dict(str(project_dir), remote=None).get("head_sha")
+    except Exception as exc:
+        print(f"error: could not determine current head_sha: {exc}", file=sys.stderr)
+        return 1
+    if ev_sha != current:
+        print(
+            f"EVIDENCE_SHA_MISMATCH: evidence head_sha={ev_sha} "
+            f"!= current head_sha={current}",
+            file=sys.stderr,
+        )
+        return 2
+    print(f"evidence: OK (head_sha={current})")
+    return 0
+
+
+def _strict_failures(contract, project_dir: Path, report) -> list[str]:
+    failures: list[str] = []
+    lv = report.local_validation
+    if lv.status != "pass":
+        failures.append(f"local_validation={_fmt_dim(lv.status, lv.reasons)}")
+    bl = report.blocking
+    if bl.status != "none":
+        failures.append(f"blocking={_fmt_dim(bl.status, bl.reasons)}")
+    dr = report.drift
+    if dr.status != "clean":
+        failures.append(f"drift={_fmt_dim(dr.status, dr.reasons)}")
+    try:
+        cfg = contract.load_config(str(project_dir))
+        required = bool(cfg.verification.github_enforcement_required)
+    except Exception:
+        # Fail closed: when the policy cannot be read, treat enforcement as required.
+        required = True
+    rs = report.remote_enforcement.status
+    if required and rs != "enforced":
+        failures.append(
+            f"remote_enforcement={_fmt_dim(rs, report.remote_enforcement.reasons)} "
+            "but github_enforcement_required=true"
+        )
+    elif not required and rs == "not_enforced":
+        failures.append(f"remote_enforcement={_fmt_dim(rs, report.remote_enforcement.reasons)}")
+    return failures
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    project_dir = _resolve_project_dir(args.path)
+    try:
+        contract = _contract()
+    except ImportError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    if args.evidence:
+        rc = _check_evidence(args, contract, project_dir)
+        if rc != 0:
+            return rc
+
+    try:
+        remote_dim, remote_note = _remote_dimension(contract, project_dir)
+        report = contract.compute_state(str(project_dir), remote=remote_dim)
+    except Exception as exc:
+        print(f"error: could not compute state: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"LACD verify for {project_dir}")
+    print(f"  state: {_state_name(report.state)}")
+    print(f"  local_validation: {_fmt_dim(report.local_validation.status, report.local_validation.reasons)}")
+    remote_line = (f"  remote_enforcement: "
+                   f"{_fmt_dim(report.remote_enforcement.status, report.remote_enforcement.reasons)}")
+    if remote_note:
+        remote_line += f"  [{remote_note}]"
+    print(remote_line)
+    print(f"  drift: {_fmt_dim(report.drift.status, report.drift.reasons)}")
+    print(f"  blocking: {_fmt_dim(report.blocking.status, report.blocking.reasons)}")
+    vc = report.version_consistency or {}
+    print(f"  version_consistency: {vc.get('status')} - {vc.get('detail')}")
+
+    if args.strict:
+        failures = _strict_failures(contract, project_dir, report)
+        if failures:
+            print("STRICT FAILED:")
+            for f in failures:
+                print(f"  - {f}")
+            return 2
+        print("STRICT: all key dimensions satisfied")
+        return 0
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# upgrade (Agent-C owns lacd.upgrade.*; CLI only parses args per contract §3)
+# ---------------------------------------------------------------------------
+
+
+def cmd_upgrade(args: argparse.Namespace) -> int:
+    if args.check and (args.dry_run or args.to or args.prepare_pr
+                       or args.accept_major or args.yes):
+        # --template-dir is a source selector, allowed with --check for
+        # offline/test use (refinement of the frozen surface, documented).
+        raise UsageError("--check cannot be combined with --dry-run/--to/--prepare-pr/--accept-major/--yes")
+    if args.dry_run and not args.to:
+        raise UsageError("--dry-run requires --to VERSION")
+    if args.prepare_pr and (not args.to or args.dry_run):
+        raise UsageError("--prepare-pr requires a real upgrade run: --to VERSION without --dry-run")
+    if not args.check and not args.to:
+        raise UsageError("one of --check or --to VERSION is required")
+
+    # ---- real upgrade engine (contract §5) ----
+    project_dir = _resolve_project_dir(args.path)
+    return _run_upgrade(project_dir, args)
+
+
+def _load_project_config(project_dir: Path):
+    """Load lacd.yaml + lock, or raise UpgradeSetupError with a clear message."""
+    from lacd.config.schema import load_config, ConfigNotFound, ConfigInvalid
+    from lacd.config.lockfile import LockFile, LockCorruptError
+    try:
+        config = load_config(project_dir)
+    except ConfigNotFound:
+        raise UpgradeSetupError(
+            "no lacd.yaml found; run 'lacd init' first")
+    except ConfigInvalid as exc:
+        raise UpgradeSetupError(f"invalid lacd.yaml: {exc}")
+    try:
+        lock = LockFile.load(project_dir)
+    except FileNotFoundError:
+        raise UpgradeSetupError(
+            "no .lacd/lock.json found; run 'lacd init' first")
+    except LockCorruptError as exc:
+        raise UpgradeSetupError(f"corrupt .lacd/lock.json: {exc}")
+    return config, lock
+
+
+def _list_releases_or_fail(source):
+    """List releases; on source failure raise UpgradeSetupError (never
+    claim 'already latest' when the source is unreachable)."""
+    from lacd.upgrade.source import SourceUnavailable, SourceInvalid
+    try:
+        return source.list_releases()
+    except SourceUnavailable as exc:
+        raise UpgradeSetupError(
+            f"upgrade source unavailable: {exc}; cannot determine latest "
+            f"version (state: UNVERIFIED, not 'already latest')")
+    except SourceInvalid as exc:
+        raise UpgradeSetupError(
+            f"upgrade source returned invalid metadata: {exc}")
+
+
+def _upgrade_check(project_dir: Path, args) -> int:
+    from lacd.core.versioning import parse_version, classify_bump
+    from lacd.upgrade.source import UpgradeSource
+    from lacd.upgrade.compat import CompatPolicy, check_compatibility
+    try:
+        config, lock = _load_project_config(project_dir)
+    except UpgradeSetupError as exc:
+        print(f"lacd: error: {exc}", file=sys.stderr)
+        return 1
+    source = UpgradeSource.from_config(config, template_dir=args.template_dir)
+    try:
+        releases = _list_releases_or_fail(source)
+    except UpgradeSetupError as exc:
+        print(f"lacd: error: {exc}", file=sys.stderr)
+        return 1
+    if not releases:
+        print("lacd: error: upgrade source returned no releases; "
+              "cannot determine whether an upgrade exists", file=sys.stderr)
+        return 1
+    current = lock.template_version
+    print(f"locked version: {current}")
+    print(f"{'version':<10}{'bump':<10}{'support':<12}{'notes'}")
+    policy = CompatPolicy()
+    shown = 0
+    for rel in sorted(releases, key=lambda r: parse_version(r.version),
+                      reverse=True):
+        if rel.prerelease:
+            continue
+        try:
+            bump = classify_bump(current, rel.version)
+        except ValueError:
+            continue
+        compat = check_compatibility(current, rel.version, policy, releases)
+        note = ""
+        if bump == "major":
+            note = "requires --accept-major"
+        elif bump == "same":
+            note = "current"
+        elif bump == "downgrade":
+            note = "older than locked"
+        print(f"{rel.version:<10}{bump:<10}{compat.support_status:<12}{note}")
+        shown += 1
+    if shown == 0:
+        print("(no comparable releases found)")
+    return 0
+
+
+def _resolve_bundle(args, source, to_version: str, releases):
+    """Return a TemplateBundle for to_version, or None when unavailable.
+
+    --template-dir wins (offline/test). Otherwise download the release's
+    template_bundle asset and verify its sha256 before use. Never executes
+    downloaded content.
+    """
+    from lacd.upgrade.migrate import (load_bundle_from_dir,
+                                      load_bundle_from_zip,
+                                      BundleVerificationError)
+    if args.template_dir:
+        manifest = os.path.join(args.template_dir, "manifest.json")
+        if not os.path.isfile(manifest):
+            # No bundle staged here (e.g. source-only dir): the planner will
+            # record a bundle-missing checkpoint instead of failing.
+            return None
+        try:
+            return load_bundle_from_dir(args.template_dir)
+        except BundleVerificationError as exc:
+            raise UpgradeSetupError(f"bad template dir: {exc}")
+    target = next((r for r in releases if r.version == to_version), None)
+    tb = (target.template_bundle or {}) if target else {}
+    url, sha256 = tb.get("url"), tb.get("sha256")
+    if not (url and sha256):
+        return None
+    data = _download_bytes(url)
+    try:
+        return load_bundle_from_zip(data, sha256)
+    except BundleVerificationError as exc:
+        raise UpgradeSetupError(
+            f"template bundle failed verification: {exc}")
+
+
+def _download_bytes(url: str, timeout: int = 30) -> bytes:
+    import urllib.request
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            return resp.read()
+    except Exception as exc:
+        raise UpgradeSetupError(f"could not download {url}: {exc}")
+
+
+def _print_plan(plan) -> None:
+    print(f"upgrade plan: {plan.from_version} -> {plan.to_version}")
+    if not plan.changes and not plan.conflicts:
+        print("  no changes (already at target)")
+        return
+    for ch in plan.changes:
+        print(f"  [{ch.risk}] {ch.action:<8} {ch.path}  ({ch.detail})")
+    for cf in plan.conflicts:
+        print(f"  [{cf.risk}] CONFLICT {cf.path}  ({cf.detail})")
+    if plan.human_checkpoints:
+        print("human checkpoints:")
+        for cp in plan.human_checkpoints:
+            print(f"  - {cp}")
+
+
+def _tree_is_clean(project_dir: Path) -> bool:
+    try:
+        out = subprocess.run(["git", "-C", str(project_dir), "status",
+                              "--porcelain"], capture_output=True, text=True,
+                             timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return out.returncode == 0 and not out.stdout.strip()
+
+
+def _run_upgrade(project_dir: Path, args) -> int:
+    from lacd.upgrade.source import UpgradeSource
+    from lacd.upgrade.planner import build_upgrade_plan, UpgradeRefused
+    from lacd.upgrade.migrate import (apply_migration, MigrationConflict,
+                                      MigrationError)
+    try:
+        config, lock = _load_project_config(project_dir)
+    except UpgradeSetupError as exc:
+        print(f"lacd: error: {exc}", file=sys.stderr)
+        return 1
+
+    if args.check:
+        return _upgrade_check(project_dir, args)
+
+    source = UpgradeSource.from_config(config, template_dir=args.template_dir)
+    try:
+        releases = _list_releases_or_fail(source)
+    except UpgradeSetupError as exc:
+        print(f"lacd: error: {exc}", file=sys.stderr)
+        return 1
+    try:
+        bundle = _resolve_bundle(args, source, args.to, releases)
+    except UpgradeSetupError as exc:
+        print(f"lacd: error: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        plan = build_upgrade_plan(project_dir, args.to, source=source,
+                                  bundle=bundle,
+                                  accept_major=args.accept_major)
+    except UpgradeRefused as exc:
+        print(f"lacd: {exc} (exit 3: refused)", file=sys.stderr)
+        return 3
+
+    if args.dry_run:
+        _print_plan(plan)
+        print("(dry-run: worktree untouched)")
+        return 0
+
+    if plan.conflicts:
+        print("lacd: error: upgrade has unresolved conflicts; refusing to "
+              "apply/prepare:", file=sys.stderr)
+        for cf in plan.conflicts:
+            print(f"  CONFLICT {cf.path}: {cf.detail}", file=sys.stderr)
+        print("resolve the conflicts manually, then re-run", file=sys.stderr)
+        return 3
+
+    if args.prepare_pr:
+        return _upgrade_prepare_pr(project_dir, args, config, plan, bundle)
+
+    # Local apply.
+    if bundle is None:
+        print("lacd: error: no template bundle available for "
+              f"{args.to}; refusing to apply without verified new content",
+              file=sys.stderr)
+        return 3
+    _print_plan(plan)
+    if not args.yes and not _confirm("Apply this migration?"):
+        print("aborted")
+        return 1
+    if not _tree_is_clean(project_dir):
+        print("lacd: error: working tree is not clean; commit or stash "
+              "changes first", file=sys.stderr)
+        return 1
+    try:
+        result = apply_migration(project_dir, plan, bundle)
+    except MigrationConflict as exc:
+        print(f"lacd: error: {exc}", file=sys.stderr)
+        return 3
+    except MigrationError as exc:
+        print(f"lacd: error: migration failed and was rolled back: {exc}",
+              file=sys.stderr)
+        return 1
+    print(f"upgraded to {args.to}: {len(result.applied)} file(s) applied")
+    print(f"backup at {result.backup_dir} (use for manual rollback)")
+    print("next: lacd status --json && lacd verify --strict")
+    return 0
+
+
+def _upgrade_prepare_pr(project_dir: Path, args, config, plan, bundle) -> int:
+    from lacd.github.pr import prepare_upgrade_pr, PrError
+    if bundle is None:
+        print("lacd: error: no template bundle available for "
+              f"{args.to}; cannot prepare a PR without verified new content",
+              file=sys.stderr)
+        return 3
+    repo, branch = _detect_repo_branch(project_dir)
+    if repo is None:
+        print("lacd: error: cannot determine the GitHub repo (no origin "
+              "remote); --prepare-pr needs a git remote pointing at GitHub",
+              file=sys.stderr)
+        return 1
+    token = os.environ.get("GITHUB_TOKEN")
+    try:
+        report = prepare_upgrade_pr(project_dir, args.to, plan, bundle,
+                                    repo, token, base=branch or "main")
+    except PrError as exc:
+        print(f"lacd: error: {exc}", file=sys.stderr)
+        return 1
+    if report.reused:
+        print(f"reusing existing upgrade PR: {report.pr_url}")
+    elif report.pr_url:
+        print(f"upgrade PR created: {report.pr_url}")
+        print(f"branch: {report.branch} (never auto-merged; human must review)")
+    else:
+        print(f"no push permission: patch written to {report.local_patch}")
+        for step in report.steps:
+            print(f"  - {step}")
+    return 0
+
+
+def _confirm(prompt: str) -> bool:
+    try:
+        answer = input(f"{prompt} [y/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return answer in ("y", "yes")
+
+
+class UpgradeSetupError(Exception):
+    """Configuration/source problem that prevents an upgrade operation."""
+
+
+# ---------------------------------------------------------------------------
+# parser assembly
+# ---------------------------------------------------------------------------
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = _Parser(prog="lacd", description="LACD: local-first adoption & change governance")
+    parser.add_argument("--version", action="version", version=f"lacd {__version__}")
+    sub = parser.add_subparsers(dest="command", metavar="<command>")
+
+    p_init = sub.add_parser("init", help="initialize LACD in a project directory")
+    p_init.add_argument("--path", default=".", help="project directory (default: .)")
+    p_init.add_argument("--dry-run", action="store_true",
+                        help="print the planned file changes without writing")
+    p_init.add_argument("--force", action="store_true",
+                        help="overwrite an existing lacd.yaml (backs it up first)")
+    p_init.set_defaults(func=cmd_init)
+
+    p_doctor = sub.add_parser("doctor", help="check the local environment")
+    p_doctor.add_argument("--path", default=".", help="project directory (default: .)")
+    p_doctor.set_defaults(func=cmd_doctor)
+
+    p_status = sub.add_parser("status", help="show the adoption state")
+    p_status.add_argument("--path", default=".", help="project directory (default: .)")
+    p_status.add_argument("--json", action="store_true",
+                          help="emit machine-readable JSON (schema-validated)")
+    p_status.set_defaults(func=cmd_status)
+
+    p_verify = sub.add_parser("verify", help="verify local dimensions (and remote when possible)")
+    p_verify.add_argument("--path", default=".", help="project directory (default: .)")
+    p_verify.add_argument("--strict", action="store_true",
+                          help="exit 2 when any key dimension is not pass/enforced")
+    p_verify.add_argument("--evidence", metavar="FILE",
+                          help="check an evidence JSON file's head_sha against the current HEAD")
+    p_verify.set_defaults(func=cmd_verify)
+
+    p_up = sub.add_parser("upgrade", help="check/plan/apply template upgrades")
+    p_up.add_argument("--path", default=".", help="project directory (default: .)")
+    p_up.add_argument("--check", action="store_true",
+                      help="list current vs available versions from the trusted source")
+    p_up.add_argument("--dry-run", action="store_true",
+                      help="print the migration plan without modifying the worktree (needs --to)")
+    p_up.add_argument("--to", metavar="VERSION", help="target version, e.g. 1.1.0")
+    p_up.add_argument("--prepare-pr", action="store_true",
+                      help="create an upgrade PR instead of applying locally")
+    p_up.add_argument("--accept-major", action="store_true",
+                      help="explicitly accept a major-version migration")
+    p_up.add_argument("--template-dir", metavar="DIR",
+                      help="use a local template bundle instead of the remote source")
+    p_up.add_argument("--yes", action="store_true",
+                      help="answer yes to confirmation prompts")
+    p_up.set_defaults(func=cmd_upgrade)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entry point. Returns the process exit code."""
+    parser = _build_parser()
+    try:
+        args = parser.parse_args(argv)
+        if not hasattr(args, "func"):
+            parser.print_help()
+            return 1
+        return args.func(args)
+    except UsageError as exc:
+        print(f"lacd: error: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

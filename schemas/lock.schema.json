@@ -1,0 +1,180 @@
+{
+  "$defs": {
+    "managed_file": {
+      "additionalProperties": false,
+      "properties": {
+        "merge": {
+          "enum": [
+            "replace",
+            "marked-section"
+          ],
+          "type": "string"
+        },
+        "path": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "template": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "template_version": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "template",
+        "template_version",
+        "merge"
+      ],
+      "type": "object"
+    },
+    "shared_file": {
+      "additionalProperties": false,
+      "properties": {
+        "merge": {
+          "enum": [
+            "replace",
+            "marked-section"
+          ],
+          "type": "string"
+        },
+        "path": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "section": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "description": "SHA-256 of the managed section content (raw bytes between the LACD markers).",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "template": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "template_version": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "section",
+        "sha256",
+        "template",
+        "template_version",
+        "merge"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://example.invalid/lacd/schemas/lacd-lock/1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Lock format version \"1\": exact versions, source and hashes of managed content.",
+  "properties": {
+    "generated_at": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "generated_by": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "lacd_cli_version": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "lock_format_version": {
+      "const": "1",
+      "type": "string"
+    },
+    "managed_files": {
+      "items": {
+        "$ref": "#/$defs/managed_file"
+      },
+      "type": "array"
+    },
+    "policy_version": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "schema_version": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "shared_files": {
+      "items": {
+        "$ref": "#/$defs/shared_file"
+      },
+      "type": "array"
+    },
+    "source": {
+      "additionalProperties": false,
+      "properties": {
+        "commit": {
+          "description": "Full 40-hex commit SHA, or null when unknown.",
+          "pattern": "^[0-9a-f]{40}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "git-tag",
+            "git-commit",
+            "local-dir"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "repo",
+        "ref",
+        "commit"
+      ],
+      "type": "object"
+    },
+    "template_version": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "lock_format_version",
+    "lacd_cli_version",
+    "source",
+    "schema_version",
+    "policy_version",
+    "template_version",
+    "managed_files",
+    "shared_files",
+    "generated_at",
+    "generated_by"
+  ],
+  "title": "LACD version lock file (.lacd/lock.json)",
+  "type": "object"
+}
