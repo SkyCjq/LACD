@@ -124,3 +124,78 @@ def test_sec_r4_01_git_show_failure_is_unverified_not_fallback(tmp_path):
     checks, warnings = cli_main._get_trusted_required_checks(repo, "0"*40)
     assert checks == []
     assert "POLICY_GIT_ERROR" in warnings, f"warnings: {warnings}"
+
+
+def test_sec_r5_01_bad_revision_is_git_error(tmp_path):
+    """SEC-R5-01: 'bad revision' must be POLICY_GIT_ERROR, not 'not found'."""
+    import sys
+    sys.path.insert(0, "src")
+    from lacd.cli import main as cli_main
+
+    repo = _make_repo(tmp_path)
+    # Non-existent SHA -> git show says "bad revision" -> must be git error
+    content, err = cli_main._read_file_at_sha(repo, "0" * 40, "lacd.yaml")
+    assert content is None
+    assert err == "POLICY_GIT_ERROR", f"bad revision misclassified: {err}"
+
+
+def test_sec_r5_02_policy_error_skips_remote_check(tmp_path, monkeypatch):
+    """SEC-R5-02: policy read error -> UNVERIFIED immediately, remote checker NOT called."""
+    import sys
+    sys.path.insert(0, "src")
+    from lacd.cli import main as cli_main
+
+    repo = _make_repo(tmp_path)
+    remote_called = []
+
+    def fake_check(repo_url, branch, *, policy=None, token=None, timeout=15):
+        remote_called.append(True)
+        from lacd.github import remote
+        return remote.EnforcementReport(status="not_enforced", reasons=["X"], details={})
+
+    monkeypatch.setattr(cli_main, "_get_check_remote_enforcement", lambda: fake_check)
+    monkeypatch.setattr(cli_main, "_detect_repo_branch", lambda p: ("o/r", "main"))
+    # Force git error by pointing to bad SHA via env
+    monkeypatch.setenv("LACD_TRUSTED_BASE_SHA", "0" * 40)
+
+    class _C:
+        @staticmethod
+        def DimensionResult(status, reasons):
+            return (status, list(reasons))
+
+    dim, note = cli_main._remote_dimension(_C(), repo)
+    assert dim[0] == "unverified", f"got {dim}"
+    assert not remote_called, "remote checker must NOT be called on policy error"
+    assert any("POLICY_" in r for r in dim[1]), f"reasons: {dim[1]}"
+
+
+def test_sec_r5_03_env_sha_preferred_over_local_ref(tmp_path, monkeypatch):
+    """SEC-R5-03: LACD_TRUSTED_BASE_SHA env var is preferred over local origin/main."""
+    import sys
+    sys.path.insert(0, "src")
+    from lacd.cli import main as cli_main
+
+    repo = _make_repo(tmp_path)
+    real_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    # Tamper local origin/main to point elsewhere (simulates local ref attack)
+    _git(repo, "checkout", "-b", "evil")
+    (repo / "lacd.yaml").write_text((repo / "lacd.yaml").read_text().replace(
+        "[ci, security]", "[nothing]"))
+    _git(repo, "add", "lacd.yaml")
+    _git(repo, "commit", "-m", "evil")
+    evil_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "update-ref", "refs/remotes/origin/main", evil_sha)
+    _git(repo, "checkout", "main")
+
+    # Without env: uses tampered local ref (documented limitation)
+    sha1, _, err1 = cli_main._check_config_trust(repo)
+    assert err1 is None
+    assert sha1 == evil_sha
+
+    # With env: uses the env-provided trusted SHA
+    monkeypatch.setenv("LACD_TRUSTED_BASE_SHA", real_sha)
+    sha2, warnings2, err2 = cli_main._check_config_trust(repo)
+    assert err2 is None
+    assert sha2 == real_sha
+    assert "TRUSTED_BASE_FROM_ENV" in warnings2

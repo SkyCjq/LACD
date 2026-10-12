@@ -806,12 +806,41 @@ def _check_config_trust(project_dir: Path) -> tuple[str, list, str | None]:
     - warnings: list of warning codes
     - error: error code if trust cannot be established, else None
 
-    Trust root: the protected base branch (origin/main) at a verified SHA.
+    Trust root: the protected base branch at a verified SHA.
+    Priority (SEC-R5-03):
+    1. LACD_TRUSTED_BASE_SHA env var (CI binds from GitHub PR metadata;
+       not forgeable by PR content since env comes from workflow, not PR files)
+    2. git rev-parse origin/main (local ref; documented limitation: a local
+       attacker with git write access can move this ref - see docs)
+
     The PR's own HEAD is NEVER the trust root.
     """
+    import os
     import subprocess
+
+    def _valid_sha(s: str) -> bool:
+        return len(s) == 40 and all(c in "0123456789abcdef" for c in s.lower())
+
+    def _verify_commit(project_dir: Path, sha: str) -> bool:
+        try:
+            r = subprocess.run(
+                ["git", "cat-file", "-t", sha],
+                cwd=str(project_dir), capture_output=True, text=True, timeout=10)
+            return r.returncode == 0 and r.stdout.strip() == "commit"
+        except Exception:
+            return False
+
+    # 1. Explicit env binding (preferred in CI)
+    env_sha = (os.environ.get("LACD_TRUSTED_BASE_SHA") or "").strip().lower()
+    if env_sha:
+        if not _valid_sha(env_sha):
+            return None, [], "POLICY_BASE_SHA_UNVERIFIED"
+        if not _verify_commit(project_dir, env_sha):
+            return None, [], "POLICY_BASE_SHA_UNVERIFIED"
+        return env_sha, ["TRUSTED_BASE_FROM_ENV"], None
+
+    # 2. Local origin/main (fallback; see documented limitation)
     try:
-        # Get origin/main SHA (the protected base)
         r = subprocess.run(
             ["git", "rev-parse", "origin/main"],
             cwd=str(project_dir), capture_output=True, text=True, timeout=10)
@@ -853,9 +882,11 @@ def _read_file_at_sha(project_dir: Path, sha: str, rel_path: str) -> tuple[str |
             cwd=str(project_dir), capture_output=True, text=True, timeout=10)
         if r.returncode == 0:
             return r.stdout, None
-        # Distinguish "not exist" from other git errors
+        # Distinguish "not exist" from other git errors (SEC-R5-01).
+        # ONLY "does not exist" / "path does not exist" means confirmed absent.
+        # "bad revision" is a revision parse error -> git error, NOT "not found".
         stderr = (r.stderr or "").lower()
-        if "does not exist" in stderr or "bad revision" in stderr or "path does not exist" in stderr:
+        if "does not exist" in stderr or "path does not exist" in stderr:
             return None, None  # confirmed absent
         return None, "POLICY_GIT_ERROR"
     except subprocess.TimeoutExpired:
@@ -905,6 +936,18 @@ def _remote_dimension(contract, project_dir: Path):
     # Read policy from TRUSTED SHA, not working tree
     required_checks, check_warnings = _get_trusted_required_checks(project_dir, trusted_sha)
     all_warnings = trust_warnings + check_warnings
+
+    # SEC-R5-02: any policy read/config error -> UNVERIFIED immediately.
+    # Do NOT continue to remote enforcement check with broken policy.
+    _fatal_policy_errors = {"POLICY_GIT_ERROR", "POLICY_GIT_TIMEOUT",
+                            "POLICY_CONFIG_UNPARSEABLE"}
+    _hit = _fatal_policy_errors.intersection(all_warnings)
+    if _hit:
+        return (contract.DimensionResult(
+                    status="unverified",
+                    reasons=sorted(_hit) + [w for w in all_warnings if w not in _hit]),
+                f"policy resolution failed ({', '.join(sorted(_hit))}); "
+                "remote enforcement cannot be verified (fail-closed)")
 
     from lacd.github.remote import EnforcementPolicy
     policy = EnforcementPolicy(
