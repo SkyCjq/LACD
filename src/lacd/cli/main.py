@@ -684,11 +684,19 @@ def _get_required_checks(project_dir: Path) -> tuple[list, list]:
         return deduped, True  # explicit (even if [])
 
     # 1. lacd.yaml governance.required_checks
+    # NOTE: check raw yaml dict (not parsed dataclass) to distinguish
+    # explicit [] from missing field (dataclass default is []).
     try:
         from lacd.config.schema import load_config, ConfigNotFound
-        cfg = load_config(str(project_dir))
-        gov = getattr(cfg, "governance", None)
-        yaml_raw = getattr(gov, "required_checks", None) if gov else None
+        import yaml as _yaml
+        yaml_path = Path(project_dir) / "lacd.yaml"
+        if not yaml_path.is_file():
+            raise ConfigNotFound(f"no lacd.yaml in {project_dir}")
+        raw_data = _yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+        # Validate via load_config (raises on invalid; mockable in tests)
+        load_config(str(project_dir))
+        gov_raw = (raw_data.get("governance") or {}) if isinstance(raw_data, dict) else {}
+        yaml_raw = gov_raw.get("required_checks", None)  # None = not present
         checks, explicit = _validate(yaml_raw, "yaml")
         if explicit:
             return checks if checks is not None else [], warnings
@@ -711,6 +719,24 @@ def _get_required_checks(project_dir: Path) -> tuple[list, list]:
         return [], warnings  # no lock -> empty, no warning
     except Exception:
         return [], warnings + ["POLICY_CONFIG_UNPARSEABLE"]
+
+
+def _check_config_trust(project_dir: Path) -> list:
+    """Check if lacd.yaml is from a trusted (committed) source.
+
+    Returns ["UNTRUSTED_CONFIG_SOURCE"] if lacd.yaml is uncommitted/modified
+    vs HEAD, else []. Mockable in tests.
+    """
+    try:
+        import subprocess
+        r = subprocess.run(
+            ["git", "status", "--porcelain", "lacd.yaml"],
+            cwd=str(project_dir), capture_output=True, text=True, timeout=10)
+        if r.returncode == 0 and r.stdout.strip():
+            return ["UNTRUSTED_CONFIG_SOURCE"]
+    except Exception:
+        pass
+    return []
 
 
 def _remote_dimension(contract, project_dir: Path):
@@ -743,20 +769,7 @@ def _remote_dimension(contract, project_dir: Path):
     required_checks, check_warnings = _get_required_checks(project_dir)
 
     # Trust boundary (D2 v3, Q2): config must come from committed baseline.
-    # If lacd.yaml is uncommitted or differs from HEAD, the policy source is
-    # untrusted -> downgrade to UNVERIFIED (prevents PR from lowering the bar).
-    trust_warnings = []
-    try:
-        import subprocess
-        # Check if lacd.yaml is tracked and unmodified vs HEAD
-        r = subprocess.run(
-            ["git", "status", "--porcelain", "lacd.yaml"],
-            cwd=str(project_dir), capture_output=True, text=True, timeout=10)
-        if r.returncode == 0 and r.stdout.strip():
-            # lacd.yaml is modified/untracked -> untrusted
-            trust_warnings.append("UNTRUSTED_CONFIG_SOURCE")
-    except Exception:
-        pass  # git not available -> skip trust check (not fail-closed here)
+    trust_warnings = _check_config_trust(project_dir)
 
     from lacd.github.remote import EnforcementPolicy
     policy = EnforcementPolicy(
