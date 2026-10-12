@@ -1,17 +1,17 @@
 {
-  "template_version": "1.0.0",
+  "template_version": "1.0.1",
   "files": [
+    {
+      "path": "project-rules.template.yaml",
+      "sha256": "3546ae7753cf0ecbc28f793e0532f9ba0eee673b7d63927d5186142419b57f1e"
+    },
     {
       "path": "managed/agents-md.section.md",
       "sha256": "f02da4680881afc425e5c67f33ae7bf085e38a3b66b174f3f3bb09b6cb3ea0e0"
     },
     {
       "path": "workflows/lacd-verify.yml",
-      "sha256": "fb6dd6dd440ffa75d3eb0c48fe7373e9c9f57bb79cc86b35b279962134ee8002"
-    },
-    {
-      "path": "project-rules.template.yaml",
-      "sha256": "3546ae7753cf0ecbc28f793e0532f9ba0eee673b7d63927d5186142419b57f1e"
+      "sha256": "900304a0be36d3f98b56667bef9c781daa5a4c9b6bf3741beca581e63c03727e"
     }
   ]
 }

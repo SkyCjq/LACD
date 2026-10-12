@@ -9,6 +9,7 @@ import yaml
 
 from lacd import __version__
 from lacd.cli import main as cli_main
+from lacd.cli import templates_dir
 
 main = cli_main.main
 
@@ -87,9 +88,9 @@ def test_init_creates_all_files(tmp_path, capsys):
     ).hexdigest()
 
     # Templates installed byte-identical.
-    tdir = cli_main.TEMPLATES_DIR
+    tdir = templates_dir()
     assert (tmp_path / ".github" / "workflows" / "lacd-verify.yml").read_bytes() == (
-        tdir / "workflows" / "lacd-verify.yml"
+        tdir.joinpath("workflows", "lacd-verify.yml")
     ).read_bytes()
 
     # project-rules.yaml created from template.
@@ -179,13 +180,13 @@ def test_project_rules_never_overwritten(tmp_path):
 
 def test_manifest_hashes_are_real(tmp_path):
     manifest = json.loads(
-        (cli_main.TEMPLATES_DIR / "manifest.json").read_text(encoding="utf-8")
+        (templates_dir().joinpath("manifest.json")).read_text(encoding="utf-8")
     )
     assert manifest["template_version"] == __version__
     assert len(manifest["files"]) == 3
     for entry in manifest["files"]:
         real = hashlib.sha256(
-            (cli_main.TEMPLATES_DIR / entry["path"]).read_bytes()
+            (templates_dir().joinpath(*entry["path"].split("/"))).read_bytes()
         ).hexdigest()
         assert entry["sha256"] == real, f"stale hash for {entry['path']}"
         assert len(entry["sha256"]) == 64

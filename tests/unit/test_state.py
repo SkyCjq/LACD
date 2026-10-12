@@ -189,6 +189,9 @@ def test_version_consistency_mismatch_does_not_change_state(project_factory):
 
 
 def test_version_consistency_consistent(project_factory):
-    d = project_factory(lock_cli_version="1.0.0")
+    # Must track the running CLI version, not a hardcoded literal,
+    # or the version bump itself breaks this test.
+    from lacd import __version__ as _v
+    d = project_factory(lock_cli_version=_v)
     report = compute_state(d)
     assert report.version_consistency["status"] == "consistent"

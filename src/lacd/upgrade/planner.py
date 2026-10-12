@@ -37,8 +37,16 @@ def build_upgrade_plan(
     source,
     bundle,
     accept_major: bool = False,
+    require_bundle: bool = False,
 ) -> MigrationPlan:
-    """Assemble the full upgrade plan for `to_version` (pure; no disk writes)."""
+    """Assemble the full upgrade plan for `to_version` (pure; no disk writes).
+
+    When `require_bundle` is True and no verified bundle is available,
+    raises UpgradeRefused("bundle-unverified") instead of producing a
+    bundle-missing checkpoint plan. Callers that intend to download and
+    apply (not just dry-run) must pass require_bundle=True, per D2:
+    a release without a trustworthy bundle sha256 must never be downloaded.
+    """
     try:
         parse_version(to_version)
     except ValueError as exc:
@@ -66,6 +74,12 @@ def build_upgrade_plan(
         )
 
     if bundle is None:
+        if require_bundle:
+            raise UpgradeRefused(
+                "bundle-unverified",
+                f"release {to_version} provides no trustworthy template-bundle "
+                "sha256; refusing to download unverified content",
+            )
         plan = MigrationPlan(from_version=from_version, to_version=to_version)
         plan.human_checkpoints.append(
             f"bundle-missing: no template bundle available for {to_version}; "

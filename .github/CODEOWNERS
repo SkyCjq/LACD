@@ -1,0 +1,11 @@
+# LACD code owners. Solo-maintainer repo: the maintainer reviews everything.
+# (Required approvals = 0 by risk acceptance; Human merge is still mandatory.)
+
+* @SkyCjq
+
+# T2 — governance / security / CI: extra care, never weaken to go green
+.github/ @SkyCjq
+.lacd/ @SkyCjq
+SECURITY.md @SkyCjq
+src/lacd/github/ @SkyCjq
+src/lacd/governance/ @SkyCjq

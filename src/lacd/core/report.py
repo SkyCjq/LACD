@@ -19,7 +19,12 @@ import jsonschema
 from lacd import __version__
 from lacd.config.lockfile import LockCorruptError, LockFile
 from lacd.config.schema import ConfigInvalid, ConfigNotFound, load_config
-from lacd.core.state import AdoptionState, StateReport, compute_state
+from lacd.core.state import (
+    AdoptionState,
+    StateReport,
+    _dist_version,
+    compute_state,
+)
 
 PathLike = Union[str, Path]
 
@@ -66,13 +71,17 @@ def _git_info(project_dir: Path) -> tuple[str | None, str | None]:
 
 
 def build_status_dict(
-    project_dir: PathLike, remote=None
+    project_dir: PathLike, remote=None, remote_queried: bool = False
 ) -> dict:
     """Build the ``lacd status --json`` document for ``project_dir``.
 
     ``remote`` is passed through to :func:`compute_state` (a
-    ``DimensionResult`` or ``None``). Never raises on missing/invalid local
-    facts; those are reflected in the dimensions and state instead.
+    ``DimensionResult`` or ``None``). ``remote_queried`` records whether the
+    ``remote_enforcement`` dimension in *this* document came from a live
+    network query (``"live"``) or not (``"not_queried"``). ``status`` itself
+    never triggers network I/O (R11); remote semantics belong to ``verify``.
+    Never raises on missing/invalid local facts; those are reflected in the
+    dimensions and state instead.
     """
     base = Path(project_dir).resolve()
     report: StateReport = compute_state(base, remote)
@@ -93,6 +102,17 @@ def build_status_dict(
     def dim(d) -> dict:
         return {"status": d.status, "reasons": list(d.reasons)}
 
+    remote_dim = dim(report.remote_enforcement)
+    # D3/FR-03: which query mode produced this document's remote dimension.
+    remote_dim["query"] = "live" if remote_queried else "not_queried"
+
+    source_pin = None
+    if lock is not None:
+        source_pin = {
+            "strength": lock.source.pin_strength,
+            "commit": lock.source.commit,
+        }
+
     return {
         "schema": "lacd-status/1",
         "lacd_cli_version": __version__,
@@ -107,11 +127,15 @@ def build_status_dict(
             "lock_format": lock.lock_format_version if lock is not None else None,
             "locked_cli": lock.lacd_cli_version if lock is not None else None,
             "template": lock.template_version if lock is not None else None,
+            # R12: installed distribution version; null when running from a
+            # source tree (not an error, just unevaluable).
+            "package": _dist_version(),
         },
+        "source_pin": source_pin,
         "state": report.state.value,
         "dimensions": {
             "local_validation": dim(report.local_validation),
-            "remote_enforcement": dim(report.remote_enforcement),
+            "remote_enforcement": remote_dim,
             "drift": dim(report.drift),
             "blocking": dim(report.blocking),
         },

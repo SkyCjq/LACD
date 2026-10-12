@@ -579,3 +579,37 @@ def test_planner_conflicts_add_checkpoint(tmp_path):
                               bundle=_bundle("1.1.0"))
     assert plan.conflicts
     assert any("conflict" in cp for cp in plan.human_checkpoints)
+
+
+def test_planner_require_bundle_refuses_unverified(tmp_path):
+    """D2: require_bundle=True + no bundle -> UpgradeRefused(bundle-unverified).
+
+    Callers that intend to download (apply/prepare-pr, not dry-run) must use
+    this so a release without a trustworthy sha256 is never downloaded.
+    """
+    _project(tmp_path)
+    with pytest.raises(UpgradeRefused) as excinfo:
+        build_upgrade_plan(tmp_path, "1.1.0",
+                           source=_StaticSource(["1.0.0", "1.1.0"]),
+                           bundle=None,
+                           require_bundle=True)
+    assert excinfo.value.reason == "bundle-unverified"
+
+
+def test_planner_require_bundle_false_is_default(tmp_path):
+    """Default (dry-run mode) still yields a checkpoint plan, not a refusal."""
+    _project(tmp_path)
+    plan = build_upgrade_plan(tmp_path, "1.1.0",
+                              source=_StaticSource(["1.0.0", "1.1.0"]),
+                              bundle=None)
+    assert any("bundle-missing" in cp for cp in plan.human_checkpoints)
+
+
+def test_planner_require_bundle_with_bundle_ok(tmp_path):
+    """require_bundle=True + verified bundle -> normal plan (no refusal)."""
+    _project(tmp_path)
+    plan = build_upgrade_plan(tmp_path, "1.1.0",
+                              source=_StaticSource(["1.0.0", "1.1.0"]),
+                              bundle=_bundle("1.1.0"),
+                              require_bundle=True)
+    assert plan.to_version == "1.1.0"

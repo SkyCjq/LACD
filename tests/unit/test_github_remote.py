@@ -167,3 +167,256 @@ def test_bad_repo_raises():
         check_remote_enforcement("not-a-repo", BRANCH, token=TOKEN)
     with pytest.raises(ValueError):
         check_remote_enforcement(REPO, "", token=TOKEN)
+
+
+# ---------------------------------------------------------------------------
+# v1.0.1 policy path (R09/R10): strict item-by-item verification
+# ---------------------------------------------------------------------------
+
+from lacd.github.remote import (  # noqa: E402
+    BYPASS_ALLOWED,
+    HUMAN_MERGE_REQUIRED,
+    POLICY_ITEM_FAILED,
+    POLICY_ITEM_UNVERIFIED,
+    POLICY_LEGACY,
+    REQUIRED_CHECK_MISSING,
+    EnforcementPolicy,
+)
+
+
+def _classic(pr_reviews=True, checks=(), admins_enabled=True, approvals=None):
+    prr = None
+    if pr_reviews:
+        prr = {"dismiss_stale_reviews": False}
+        if approvals is not None:
+            prr["required_approving_review_count"] = approvals
+    return {
+        "required_pull_request_reviews": prr,
+        "required_status_checks": {"checks": [{"context": c} for c in checks]},
+        "enforce_admins": {"enabled": admins_enabled},
+    }
+
+
+def _ruleset_detail(rid, enforcement="active", include=("refs/heads/main",),
+                    exclude=(), pr_rule=True, approvals=None,
+                    checks=(), bypass=()):
+    rules = []
+    if pr_rule:
+        params = {}
+        if approvals is not None:
+            params["required_approving_review_count"] = approvals
+        rules.append({"type": "pull_request", "parameters": params})
+    if checks:
+        rules.append({"type": "required_status_checks", "parameters": {
+            "required_status_checks": [{"context": c} for c in checks]}})
+    return {
+        "id": rid, "enforcement": enforcement,
+        "conditions": {"ref_name": {"include": list(include),
+                                    "exclude": list(exclude)}},
+        "rules": rules,
+        "bypass_actors": list(bypass),
+    }
+
+
+class _PolicyUrlopen:
+    """Configurable fake: protection may be dict/404/403; rulesets likewise."""
+
+    def __init__(self, protection="ok", rulesets="empty", details=None):
+        # protection: "ok" | "nopreq" | 404 | 403 | "network"
+        # rulesets: "empty" | 403 | "network" | list-of-detail-dicts | "detail404"
+        self.protection = protection
+        self.rulesets = rulesets
+        self.details = details or {}
+
+    def __call__(self, req, timeout=None):
+        url = req.full_url if isinstance(req, urllib.request.Request) else req
+        if url.endswith("/protection"):
+            p = self.protection
+            if p == "network":
+                raise urllib.error.URLError("down")
+            if p == 403:
+                raise urllib.error.HTTPError(url, 403, "F", {}, None)
+            if p == 404:
+                raise urllib.error.HTTPError(url, 404, "NF", {}, None)
+            if p == "nopreq":
+                return _FakeResp(200, _classic(pr_reviews=False))
+            return _FakeResp(200, p if isinstance(p, dict) else _classic())
+        if url.endswith("/rulesets"):
+            r = self.rulesets
+            if r == "network":
+                raise urllib.error.URLError("down")
+            if r == 403:
+                raise urllib.error.HTTPError(url, 403, "F", {}, None)
+            if r == 404:
+                raise urllib.error.HTTPError(url, 404, "NF", {}, None)
+            if isinstance(r, list):
+                return _FakeResp(200, [{"id": d["id"]} for d in r])
+            return _FakeResp(200, [])
+        for rid, detail in self.details.items():
+            if url.endswith(f"/rulesets/{rid}"):
+                if detail == 404:
+                    raise urllib.error.HTTPError(url, 404, "NF", {}, None)
+                return _FakeResp(200, detail)
+        raise AssertionError(f"unexpected URL: {url}")
+
+
+def _ppolicy(**kw):
+    return EnforcementPolicy(**kw)
+
+
+def _run(monkeypatch, policy, protection="ok", rulesets="empty", details=None):
+    fake = _PolicyUrlopen(protection, rulesets, details)
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    return check_remote_enforcement(REPO, BRANCH, policy=policy, token=TOKEN)
+
+
+def test_policy_all_confirmed_classic_is_enforced(monkeypatch):
+    rep = _run(monkeypatch, _ppolicy(required_checks=["ci"]),
+               protection=_classic(checks=["ci"]))
+    assert rep.status == "enforced"
+    assert REMOTE_PROTECTION_VERIFIED in rep.reasons
+    assert rep.details["items"]["require_pull_request"]["checked"] is True
+    assert rep.details["items"]["require_pull_request"]["satisfied"] is True
+    assert rep.details["items"]["required_checks"]["satisfied"] is True
+    assert rep.details["items"]["allow_bypass=false"]["satisfied"] is True
+    assert rep.details["policy_version"] == "1"
+
+
+def test_policy_ruleset_enforced_with_active_matching(monkeypatch):
+    d = _ruleset_detail(9, checks=["ci"])
+    rep = _run(monkeypatch, _ppolicy(required_checks=["ci"]),
+               protection=404, rulesets=[d], details={9: d})
+    assert rep.status == "enforced"
+    assert RULESET_PULL_REQUEST_VERIFIED in rep.reasons
+
+
+def test_policy_disabled_ruleset_is_not_enforced(monkeypatch):
+    d = _ruleset_detail(9, enforcement="disabled")
+    rep = _run(monkeypatch, _ppolicy(), protection=404,
+               rulesets=[d], details={9: d})
+    assert rep.status == "not_enforced"
+    assert rep.status != "enforced"
+    assert POLICY_ITEM_FAILED in rep.reasons
+    assert "require_pull_request" in rep.details["failed"]
+
+
+def test_policy_nonmatching_ref_is_not_enforced(monkeypatch):
+    d = _ruleset_detail(9, include=("refs/heads/other",))
+    rep = _run(monkeypatch, _ppolicy(), protection=404,
+               rulesets=[d], details={9: d})
+    assert rep.status == "not_enforced"
+    assert rep.status != "enforced"
+
+
+def test_policy_excluded_ref_is_not_enforced(monkeypatch):
+    d = _ruleset_detail(9, include=("refs/heads/*",),
+                        exclude=("refs/heads/main",))
+    rep = _run(monkeypatch, _ppolicy(), protection=404,
+               rulesets=[d], details={9: d})
+    assert rep.status == "not_enforced"
+
+
+def test_policy_bypass_admin_not_enforced(monkeypatch):
+    rep = _run(monkeypatch, _ppolicy(allow_bypass=False),
+               protection=_classic(admins_enabled=False))
+    assert rep.status == "not_enforced"
+    assert BYPASS_ALLOWED in rep.reasons
+
+
+def test_policy_bypass_actors_not_enforced(monkeypatch):
+    d = _ruleset_detail(9, bypass=[{"actor_type": "Team"}])
+    rep = _run(monkeypatch, _ppolicy(allow_bypass=False), protection=404,
+               rulesets=[d], details={9: d})
+    assert rep.status == "not_enforced"
+    assert BYPASS_ALLOWED in rep.reasons
+
+
+def test_policy_bypass_allowed_when_permitted(monkeypatch):
+    rep = _run(monkeypatch, _ppolicy(allow_bypass=True),
+               protection=_classic(admins_enabled=False))
+    assert rep.status == "enforced"
+
+
+def test_policy_403_is_unverified_with_missing_list(monkeypatch):
+    rep = _run(monkeypatch, _ppolicy(), protection=403)
+    assert rep.status == "unverified"
+    assert POLICY_ITEM_UNVERIFIED in rep.reasons
+    assert rep.details["missing"]  # non-empty missing list
+    assert rep.status != "enforced"
+
+
+def test_policy_403_rulesets_unverifiable(monkeypatch):
+    rep = _run(monkeypatch, _ppolicy(), protection=404, rulesets=403)
+    assert rep.status == "unverified"
+    assert POLICY_ITEM_UNVERIFIED in rep.reasons
+
+
+def test_policy_404_classic_no_rulesets_is_not_enforced(monkeypatch):
+    # 404 on classic = definitive "absent" (GitHub semantics), not unreadable.
+    rep = _run(monkeypatch, _ppolicy(), protection=404, rulesets="empty")
+    assert rep.status == "not_enforced"
+    assert POLICY_ITEM_FAILED in rep.reasons
+    assert "require_pull_request" in rep.details["failed"]
+
+
+def test_policy_missing_required_check_not_enforced(monkeypatch):
+    rep = _run(monkeypatch, _ppolicy(required_checks=["ci", "security"]),
+               protection=_classic(checks=["ci"]))
+    assert rep.status == "not_enforced"
+    assert REQUIRED_CHECK_MISSING in rep.reasons
+    assert rep.details["items"]["required_checks"]["missing"] == ["security"]
+
+
+def test_policy_check_unverifiable_when_sources_unreadable(monkeypatch):
+    rep = _run(monkeypatch, _ppolicy(required_checks=["ci"]),
+               protection=404, rulesets=403)
+    assert rep.status == "unverified"
+    assert POLICY_ITEM_UNVERIFIED in rep.reasons
+
+
+def test_policy_ruleset_detail_unreadable_is_unverified(monkeypatch):
+    d = _ruleset_detail(9)
+    rep = _run(monkeypatch, _ppolicy(), protection=404,
+               rulesets=[d], details={9: 404})
+    assert rep.status == "unverified"
+    assert POLICY_ITEM_UNVERIFIED in rep.reasons
+
+
+def test_policy_no_stale_verdict_old_sha(monkeypatch):
+    # The check reflects CURRENT remote state: no caching of a past ENFORCED.
+    fake = _PolicyUrlopen(protection=_classic())
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    r1 = check_remote_enforcement(REPO, BRANCH, policy=_ppolicy(), token=TOKEN)
+    assert r1.status == "enforced"
+    fake.protection = "nopreq"  # remote changed: PR requirement removed
+    r2 = check_remote_enforcement(REPO, BRANCH, policy=_ppolicy(), token=TOKEN)
+    assert r2.status == "not_enforced"
+
+
+def test_policy_zero_approvals_reports_human_merge(monkeypatch):
+    rep = _run(monkeypatch, _ppolicy(human_merge_required=True),
+               protection=_classic(approvals=0))
+    assert rep.status == "enforced"
+    assert HUMAN_MERGE_REQUIRED in rep.reasons
+    assert rep.details["human_merge_required"] is True
+    assert "human_merge_note" in rep.details
+
+
+def test_policy_none_keeps_legacy_semantics_and_marks_deprecated(monkeypatch):
+    _patch(monkeypatch, "ok")
+    rep = check_remote_enforcement(REPO, BRANCH, token=TOKEN)  # policy=None
+    assert rep.status == "enforced"
+    assert REMOTE_PROTECTION_VERIFIED in rep.reasons
+    assert POLICY_LEGACY in rep.reasons
+
+
+def test_policy_invalid_type_rejected(monkeypatch):
+    _patch(monkeypatch, "ok")
+    with pytest.raises(ValueError):
+        check_remote_enforcement(REPO, BRANCH, policy="nope", token=TOKEN)
+
+
+def test_policy_network_error_is_unverified(monkeypatch):
+    rep = _run(monkeypatch, _ppolicy(), protection="network")
+    assert rep.status == "unverified"
+    assert REMOTE_NETWORK_ERROR in rep.reasons

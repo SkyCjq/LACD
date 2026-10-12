@@ -13,10 +13,14 @@ from lacd.upgrade.source import (
     SourceInvalid,
     SourceUnavailable,
     UpgradeSource,
+    _parse_template_bundle,
+    parse_template_bundle,
     version_from_tag,
 )
+from lacd.upgrade.migrate import BundleVerificationError, load_bundle_from_zip
 
 SHA = "ab" * 32
+SHA2 = "cd" * 32
 
 
 def _write_json(path, payload):
@@ -280,3 +284,231 @@ def test_from_config_template_dir_without_releases_json_falls_back(tmp_path, mon
     monkeypatch.delenv("LACD_TEMPLATE_DIR", raising=False)
     src = UpgradeSource.from_config(_FakeConfig(), template_dir=str(tmp_path))
     assert isinstance(src, GitHubReleasesSource)
+
+
+# ---------------------------------------------------------------------------
+# parse_template_bundle (v1.0.1: three formats, fail-closed)
+# ---------------------------------------------------------------------------
+
+def _fixture_path(name):
+    import pathlib
+    return pathlib.Path(__file__).parent / "fixtures" / name
+
+
+def _real_v100_release():
+    with open(_fixture_path("real-v100-release.json"), encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _asset(name="lacd-templates-1.0.1.zip",
+           url="https://example.com/lacd-templates-1.0.1.zip"):
+    return {"name": name, "browser_download_url": url}
+
+
+def test_parse_real_v100_unclosed_fence_returns_none():
+    """Defect #1 regression: the real v1.0.0 body has an UNCLOSED fence.
+
+    The new parser must return None (fail-closed), not crash and not
+    misparse the sha256 out of the broken block via the fallback.
+    """
+    release = _real_v100_release()
+    # sanity: the fixture really is the broken one (single opening fence)
+    assert release["body"].count("```") == 1
+    assert len(release["assets"]) == 1
+    result = parse_template_bundle(release)  # must not raise
+    assert result is None
+
+
+def test_parse_closed_fence_succeeds():
+    body = (
+        "notes\n"
+        "```json\n"
+        '{"template_bundle": {"url": "https://x/y.zip", "sha256": "%s"}}\n'
+        "```\n"
+    ) % SHA
+    release = {"body": body, "assets": []}
+    assert parse_template_bundle(release) == {"url": "https://x/y.zip", "sha256": SHA}
+
+
+def test_parse_closed_fence_uppercase_hex_normalized():
+    body = '```json\n{"template_bundle": {"url": "https://x/y.zip", "sha256": "%s"}}\n```' % (
+        SHA.upper())
+    assert parse_template_bundle({"body": body, "assets": []})["sha256"] == SHA
+
+
+def test_parse_sha_line_with_single_asset_succeeds():
+    body = f"Release notes\nTemplate-Bundle-SHA256: {SHA}\n"
+    release = {"body": body, "assets": [_asset()]}
+    assert parse_template_bundle(release) == {
+        "url": "https://example.com/lacd-templates-1.0.1.zip",
+        "sha256": SHA,
+    }
+
+
+def test_parse_sha_line_case_insensitive_separator():
+    body = f"notes\nTemplate_Bundle_SHA256 = {SHA}\n"
+    release = {"body": body, "assets": [_asset()]}
+    assert parse_template_bundle(release)["sha256"] == SHA
+
+
+def test_parse_single_asset_fallback_bare_hex_in_prose():
+    """Format (c): one asset + bare 64-hex in prose (no fence)."""
+    body = (
+        "## Checksums\n\n"
+        f"{SHA}  lacd-templates-1.0.1.zip\n"
+    )
+    release = {"body": body, "assets": [_asset()]}
+    assert parse_template_bundle(release) == {
+        "url": "https://example.com/lacd-templates-1.0.1.zip",
+        "sha256": SHA,
+    }
+
+
+def test_parse_bare_hex_inside_fence_does_not_count():
+    """A 64-hex inside a CLOSED fence is not prose: (c) must not bind it."""
+    body = (
+        "```\n"
+        f"checksum: {SHA}\n"
+        "```\n"
+        "no hex in prose here\n"
+    )
+    release = {"body": body, "assets": [_asset()]}
+    assert parse_template_bundle(release) is None
+
+
+def test_parse_missing_sha_refused():
+    """Asset present but no sha256 anywhere -> None (never download blind)."""
+    release = {"body": "just notes, no hashes", "assets": [_asset()]}
+    assert parse_template_bundle(release) is None
+
+
+def test_parse_no_assets_no_bundle():
+    assert parse_template_bundle({"body": "nothing", "assets": []}) is None
+
+
+def test_parse_non_hex_sha_refused():
+    body = (
+        "```json\n"
+        '{"template_bundle": {"url": "https://x/y.zip", "sha256": "not-hex-at-all"}}\n'
+        "```\n"
+    )
+    assert parse_template_bundle({"body": body, "assets": []}) is None
+
+
+def test_parse_short_hex_sha_refused():
+    body = f"Template-Bundle-SHA256: {'ab' * 16}\n"  # 32 hex, too short
+    assert parse_template_bundle({"body": body, "assets": [_asset()]}) is None
+
+
+def test_parse_multiple_assets_ambiguous_refused():
+    """Two candidate assets + one sha line: ambiguous -> None (fail-closed)."""
+    body = f"Template-Bundle-SHA256: {SHA}\n"
+    release = {"body": body, "assets": [_asset(), _asset("lacd-templates-1.0.1.tar.gz")]}
+    assert parse_template_bundle(release) is None
+
+
+def test_parse_unclosed_fence_does_not_block_sha_line():
+    """Unclosed fence + valid (b) line: (b) still binds (fence only kills (a))."""
+    body = (
+        "```json\n"
+        '{"template_bundle": {"url": "https://x/y.zip", "sha256": "%s"}}\n'
+        "(unclosed fence above)\n"
+        f"Template-Bundle-SHA256: {SHA2}\n"
+    ) % SHA
+    release = {"body": body, "assets": [_asset()]}
+    result = parse_template_bundle(release)
+    assert result == {
+        "url": "https://example.com/lacd-templates-1.0.1.zip",
+        "sha256": SHA2,
+    }
+
+
+def test_parse_fence_first_wins_over_sha_line():
+    """(a) has priority: closed fence binds even when a (b) line also exists."""
+    body = (
+        "```json\n"
+        '{"template_bundle": {"url": "https://fence/y.zip", "sha256": "%s"}}\n'
+        "```\n"
+        f"Template-Bundle-SHA256: {SHA2}\n"
+    ) % SHA
+    release = {"body": body, "assets": [_asset()]}
+    result = parse_template_bundle(release)
+    assert result == {"url": "https://fence/y.zip", "sha256": SHA}
+
+
+def test_parse_invalid_json_fence_skipped():
+    body = "```json\n{not valid json\n```\n"
+    assert parse_template_bundle({"body": body, "assets": []}) is None
+
+
+def test_parse_fence_missing_url_refused():
+    body = '```json\n{"template_bundle": {"sha256": "%s"}}\n```\n' % SHA
+    assert parse_template_bundle({"body": body, "assets": []}) is None
+
+
+def test_parse_not_a_dict():
+    assert parse_template_bundle(None) is None
+    assert parse_template_bundle("body") is None
+    assert parse_template_bundle({}) is None
+
+
+def test_parse_asset_missing_download_url():
+    body = f"Template-Bundle-SHA256: {SHA}\n"
+    release = {"body": body, "assets": [{"name": "lacd-templates-1.0.1.zip"}]}
+    assert parse_template_bundle(release) is None
+
+
+def test_legacy_parse_unchanged():
+    """Old _parse_template_bundle kept for internal compatibility."""
+    # (a) still works
+    body = '```json\n{"template_bundle": {"url": "https://x/y.zip", "sha256": "%s"}}\n```' % SHA
+    assert _parse_template_bundle({"body": body, "assets": []}) == {
+        "url": "https://x/y.zip", "sha256": SHA}
+    # (b) still works
+    release = {"body": f"Template-Bundle-SHA256: {SHA}\n", "assets": [_asset()]}
+    assert _parse_template_bundle(release)["sha256"] == SHA
+    # unclosed fence -> None (same as before)
+    assert _parse_template_bundle(_real_v100_release()) is None
+
+
+def test_github_source_uses_new_parser(monkeypatch):
+    """list_releases resolves bundles via parse_template_bundle (3 formats)."""
+    # format (c): single asset + bare hex in prose
+    body = f"checksums:\n{SHA}  lacd-templates-1.0.1.zip\n"
+    payload = json.dumps([{
+        "tag_name": "v1.0.1",
+        "body": body,
+        "assets": [_asset()],
+    }]).encode()
+    _patch_urlopen(monkeypatch, lambda: _FakeResp(payload))
+    releases = GitHubReleasesSource("o/r").list_releases()
+    assert releases[0].template_bundle == {
+        "url": "https://example.com/lacd-templates-1.0.1.zip",
+        "sha256": SHA,
+    }
+
+
+def test_load_bundle_from_zip_rejects_tampered_sha():
+    """A sha256 that does not match the bytes is refused (fail-closed)."""
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(
+            {"template_version": "1.0.1", "files": []}))
+    data = buf.getvalue()
+    with pytest.raises(BundleVerificationError):
+        load_bundle_from_zip(data, SHA)  # wrong sha for these bytes
+
+
+def test_load_bundle_from_zip_accepts_correct_sha():
+    import io
+    import zipfile
+    import hashlib
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(
+            {"template_version": "1.0.1", "files": []}))
+    data = buf.getvalue()
+    bundle = load_bundle_from_zip(data, hashlib.sha256(data).hexdigest())
+    assert bundle.version == "1.0.1"

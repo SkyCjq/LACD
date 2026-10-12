@@ -336,17 +336,23 @@ def test_at_10_two_projects_two_versions_coexist(tmp_path, capsys):
 
 def test_at_11_check_classifies_patch_minor_major(tmp_path, capsys):
     """AT-11: --check distinguishes Patch/Minor/Major from a version source."""
+    # Upstream versions are derived from the running CLI version (not
+    # hardcoded): after a version bump, "1.0.1" is no longer a patch upgrade.
+    major, minor, patch = (int(x) for x in CLI_VERSION.split("."))
+    v_patch = f"{major}.{minor}.{patch + 1}"
+    v_minor = f"{major}.{minor + 1}.0"
+    v_major = f"{major + 1}.0.0"
     upstream = _make_upstream(tmp_path, {
-        "1.0.1": {}, "1.1.0": {}, "2.0.0": {}})
+        v_patch: {}, v_minor: {}, v_major: {}})
     proj = _adopted(tmp_path, "alpha")
     _lacd_init(proj)
     rc = cli(["upgrade", "--check", "--path", str(proj),
               "--template-dir", str(upstream)])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "patch" in out and "1.0.1" in out
-    assert "minor" in out and "1.1.0" in out
-    assert "major" in out and "2.0.0" in out
+    assert "patch" in out and v_patch in out
+    assert "minor" in out and v_minor in out
+    assert "major" in out and v_major in out
 
 
 def test_at_12_broken_source_never_reports_latest(tmp_path, capsys):
