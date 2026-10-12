@@ -389,7 +389,7 @@ def test_flow_strict_passes_when_remote_enforced(git_project, monkeypatch, capsy
     monkeypatch.setattr(cli_main, "_get_check_remote_enforcement",
                         lambda: fake_check)
     monkeypatch.setattr(cli_main, "_get_required_checks",
-                        lambda project_dir: ["ci-check"])
+                        lambda project_dir: (["ci-check"], []))
     assert main(["verify", "--path", str(p), "--strict"]) == 0
     out = capsys.readouterr().out
     assert "remote_enforcement: enforced" in out
