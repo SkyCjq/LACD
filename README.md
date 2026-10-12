@@ -2,8 +2,6 @@
 
 **Open-source governance workflow for AI coding agents: verifiable adoption, GitHub PR safeguards, human review, and safe versioned upgrades.**
 
-<img width="1774" height="887" alt="LACD Workflow Infographic Poster" src="https://github.com/user-attachments/assets/0f958732-fdd5-45e2-a434-e55d05c5cc78" />
-
 LACD is an independent, generic, business-agnostic framework for agentic
 software development. It defines how software projects organize agent work,
 verify evidence, control change risk, govern GitHub changes — and how they
@@ -11,8 +9,8 @@ adopt new LACD versions in a controlled way. It ships as a CLI (`lacd`)
 plus versioned templates, schemas, and GitHub integration. No central
 server, no SaaS, no telemetry, no business-project coupling.
 
-> **Status: v1.0.1 released; v1.0.2 in development (candidate).** See [CHANGELOG.md](CHANGELOG.md).
-> Install: `pip install "git+https://github.com/SkyCjq/LACD.git@v1.0.1"`.
+> **Status: v1.0.2 released.** See [CHANGELOG.md](CHANGELOG.md).
+> Install: `pip install "git+https://github.com/SkyCjq/LACD.git@v1.0.2"`.
 > Tag / GitHub Release / branch protection remain Human actions (see
 > [docs/operations/human-approval.md](docs/operations/human-approval.md)).
 
@@ -72,7 +70,7 @@ v1.0 is **not** published to PyPI. Install from a verifiable source:
 
 ```bash
 # From a fixed tag:
-pip install "git+https://github.com/SkyCjq/LACD.git@v1.0.1"
+pip install "git+https://github.com/SkyCjq/LACD.git@v1.0.2"
 
 # Or pin to an exact commit (strongest reproducibility):
 pip install "git+https://github.com/SkyCjq/LACD.git@<40-hex-commit>"
