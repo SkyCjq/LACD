@@ -1,0 +1,17 @@
+# LACD project rules template.
+# Installed once by `lacd init` as .lacd/project-rules.yaml.
+#
+# This file is PROJECT-OWNED: `lacd init` creates it only when absent and
+# `lacd upgrade` never overwrites it. Add project-specific governance
+# extensions below.
+#
+# Example:
+# rules:
+#   - id: "example-no-direct-push"
+#     description: "All changes to the default branch go through pull requests."
+#     risk_tier: "T2"
+#
+# The CLI reports this file's presence via `lacd status --json` but does not
+# interpret custom rules in v1.0.
+
+rules: []

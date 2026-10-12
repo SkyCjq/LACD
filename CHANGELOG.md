@@ -4,7 +4,28 @@ All notable changes to LACD are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows
 [Semantic Versioning](https://semver.org/).
 
-## [1.0.1] — 2026-10-12 (unreleased)
+## [1.0.2] — (unreleased)
+
+Patch (SemVer Patch, backward compatible). Implements
+`docs/specification/V1_0_2_DELTA.md`:
+
+### Fixed
+- **Adopter template version**: `lacd-verify.yml` installs `@v1.0.2`
+  (was `@v1.0.0` calling `--local`, which v1.0.0 lacks). Tag-based per
+  ADR-0013; never pre-fabricates merge SHAs.
+- **CLI remote path**: `_remote_dimension()` always constructs
+  `EnforcementPolicy`; `policy=None` legacy banned from the main path by test.
+  Empty `required_checks` + remote ENFORCED → downgraded to UNVERIFIED.
+
+### Added
+- Q1/Q2/RRC/PRV terminology and SOP (`PROTOCOL.md` §5, ADR-0012);
+  `AGENTS.md`/`CONTRIBUTING.md` map to the same terms.
+- RRC runbook (`docs/operations/rrc.md`): post-merge release-qualification
+  checklist, `PASS/FAIL/HOLD`, evidence kept out of `main`.
+- `test/fixtures/real-v101-release.json`: v1.0.1 is parseable;
+  v1.0.2 correctly undiscoverable before release.
+
+## [1.0.1] — 2026-10-12
 
 Patch release: fixes real v1.0.0 defects, hardens the release/CI/governance
 chain, and adds AI discoverability assets. Backward compatible (no CLI/Schema

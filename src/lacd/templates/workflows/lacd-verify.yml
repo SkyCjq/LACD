@@ -42,7 +42,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install LACD CLI (locked release tag)
-        run: pip install "git+https://github.com/SkyCjq/LACD.git@v1.0.0"
+        run: pip install "git+https://github.com/SkyCjq/LACD.git@v1.0.2"
 
       - name: Show LACD version
         run: lacd --version

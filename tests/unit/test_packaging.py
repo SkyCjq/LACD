@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from lacd import __version__ as LACD_VERSION
+
 REPO = Path(__file__).resolve().parents[2]
 
 
@@ -71,7 +73,7 @@ def test_wheel_contains_templates_and_schemas(tmp_path):
     assert "lacd/schemas/lacd-config.schema.json" in names
     assert "lacd/schemas/status.schema.json" in names
     # version baked in
-    assert f"lacd-1.0.1-" in wheel.name, wheel.name
+    assert f"lacd-{LACD_VERSION}-" in wheel.name, wheel.name
 
 
 def test_wheel_has_no_build_artifacts(tmp_path):
@@ -140,7 +142,7 @@ def test_clean_install_then_init_status_verify(tmp_path):
 
     # the installed CLI reports the bumped version (from the wheel, not src)
     proc = _run([str(vlacd), "--version"], env=env)
-    assert "1.0.1" in proc.stdout, proc.stdout
+    assert LACD_VERSION in proc.stdout, proc.stdout
 
     # fresh git repo, real init (v1.0.0 raised FileNotFoundError here)
     proj = tmp_path / "proj"
@@ -156,11 +158,11 @@ def test_clean_install_then_init_status_verify(tmp_path):
     # status --json validates and reports the new fields
     proc = _run([str(vlacd), "status", "--json", "--path", str(proj)], env=env)
     doc = json.loads(proc.stdout)
-    assert doc["lacd_cli_version"] == "1.0.1"
+    assert doc["lacd_cli_version"] == LACD_VERSION
     assert doc["dimensions"]["remote_enforcement"]["query"] == "not_queried"
     assert doc["source_pin"]["strength"] == "tag-only"  # init records no SHA
     assert any("tag-only" in s for s in doc["next_steps"])
-    assert doc["versions"]["package"] == "1.0.1"
+    assert doc["versions"]["package"] == LACD_VERSION
 
     # verify runs (local mode); remote degrades honestly without a credential
     proc = subprocess.run([str(vlacd), "verify", "--path", str(proj)],

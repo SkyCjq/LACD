@@ -190,14 +190,17 @@ def test_verify_strict_all_green_with_enforced_remote_exits_0(
         tmp_path, monkeypatch, capsys):
     install_fake_contract(monkeypatch, enforcement_required=True)
 
-    def fake_check(repo, branch, token=None, timeout=15):
+    def fake_check(repo, branch, policy=None, token=None, timeout=15):
         assert repo == "example/repo" and branch == "main"
+        assert policy is not None, "_remote_dimension must pass EnforcementPolicy (FR-102-02)"
         return _ns(status="enforced", reasons=["REMOTE_PROTECTION_VERIFIED"])
 
     monkeypatch.setattr(cli_main, "_get_check_remote_enforcement",
                         lambda: fake_check)
     monkeypatch.setattr(cli_main, "_detect_repo_branch",
                         lambda project_dir: ("example/repo", "main"))
+    monkeypatch.setattr(cli_main, "_get_required_checks",
+                        lambda project_dir: ["ci-check"])
     rc = main(["verify", "--path", str(tmp_path), "--strict"])
     assert rc == 0
     assert "STRICT: all key dimensions satisfied" in capsys.readouterr().out
@@ -206,13 +209,16 @@ def test_verify_strict_all_green_with_enforced_remote_exits_0(
 def test_verify_strict_remote_not_enforced_exits_2(tmp_path, monkeypatch, capsys):
     install_fake_contract(monkeypatch, enforcement_required=False)
 
-    def fake_check(repo, branch, token=None, timeout=15):
+    def fake_check(repo, branch, policy=None, token=None, timeout=15):
+        assert policy is not None, "_remote_dimension must pass EnforcementPolicy (FR-102-02)"
         return _ns(status="not_enforced", reasons=["REMOTE_PROTECTION_ABSENT"])
 
     monkeypatch.setattr(cli_main, "_get_check_remote_enforcement",
                         lambda: fake_check)
     monkeypatch.setattr(cli_main, "_detect_repo_branch",
                         lambda project_dir: ("example/repo", "main"))
+    monkeypatch.setattr(cli_main, "_get_required_checks",
+                        lambda project_dir: ["ci-check"])
     rc = main(["verify", "--path", str(tmp_path), "--strict"])
     assert rc == 2
 
@@ -494,3 +500,98 @@ def test_verify_remote_flag_attempts_remote(tmp_path, monkeypatch, capsys):
     rc = main(["verify", "--path", str(tmp_path), "--remote"])
     assert rc == 0
     assert "REMOTE_NOT_CHECKED" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# FR-102-02: _remote_dimension must always pass an explicit EnforcementPolicy.
+# The policy=None legacy path is never used on the CLI main path.
+# ---------------------------------------------------------------------------
+
+def test_remote_dimension_never_passes_policy_none(tmp_path, monkeypatch):
+    """Iron test: _remote_dimension must not call check_remote_enforcement
+    with policy=None (MUST pass EnforcementPolicy per FR-102-02)."""
+    install_fake_contract(monkeypatch)
+    captured = {}
+
+    def fake_check(repo, branch, *, policy=None, token=None, timeout=15):
+        captured["policy"] = policy
+        return _ns(status="enforced", reasons=["REMOTE_PROTECTION_VERIFIED"])
+
+    monkeypatch.setattr(cli_main, "_get_check_remote_enforcement",
+                        lambda: fake_check)
+    monkeypatch.setattr(cli_main, "_detect_repo_branch",
+                        lambda project_dir: ("example/repo", "main"))
+    monkeypatch.setattr(cli_main, "_get_required_checks",
+                        lambda project_dir: ["ci-check", "lint"])
+
+    dim, note = cli_main._remote_dimension(cli_main._contract(), tmp_path)
+    assert "policy" in captured, "check_remote_enforcement was not called"
+    assert captured["policy"] is not None, \
+        "policy=None is forbidden on the CLI main path (FR-102-02)"
+    # Policy fields per MODULE_CONTRACT §10
+    p = captured["policy"]
+    assert p.policy_version == "1"
+    assert p.require_pull_request is True
+    assert p.required_checks == ["ci-check", "lint"]
+    assert p.allow_bypass is False
+    assert p.human_merge_required is True
+    assert dim.status == "enforced"
+
+
+def test_remote_dimension_empty_required_checks_is_unverified(tmp_path, monkeypatch):
+    """No configured required checks -> an "enforced" verdict is downgraded to
+    UNVERIFIED (fail-closed, no false positive). The API is still called with
+    an explicit policy (never policy=None)."""
+    install_fake_contract(monkeypatch)
+    captured = {}
+
+    def fake_check(repo, branch, *, policy=None, token=None, timeout=15):
+        captured["policy"] = policy
+        # Simulate a repo that would otherwise look "enforced"
+        return _ns(status="enforced", reasons=["REMOTE_PROTECTION_VERIFIED"])
+
+    monkeypatch.setattr(cli_main, "_get_check_remote_enforcement",
+                        lambda: fake_check)
+    monkeypatch.setattr(cli_main, "_detect_repo_branch",
+                        lambda project_dir: ("example/repo", "main"))
+    monkeypatch.setattr(cli_main, "_get_required_checks",
+                        lambda project_dir: [])
+
+    dim, note = cli_main._remote_dimension(cli_main._contract(), tmp_path)
+    assert captured["policy"] is not None, "policy must always be passed"
+    assert captured["policy"].required_checks == []
+    assert dim.status == "unverified"
+    assert "REQUIRED_CHECKS_UNCONFIGURED" in dim.reasons
+    assert "fail-closed" in note
+
+
+def test_remote_dimension_empty_checks_keeps_unverified(tmp_path, monkeypatch):
+    """Non-enforced verdicts pass through unchanged with empty checks."""
+    install_fake_contract(monkeypatch)
+
+    def fake_check(repo, branch, *, policy=None, token=None, timeout=15):
+        return _ns(status="not_enforced", reasons=["REMOTE_PROTECTION_ABSENT"])
+
+    monkeypatch.setattr(cli_main, "_get_check_remote_enforcement",
+                        lambda: fake_check)
+    monkeypatch.setattr(cli_main, "_detect_repo_branch",
+                        lambda project_dir: ("example/repo", "main"))
+    monkeypatch.setattr(cli_main, "_get_required_checks",
+                        lambda project_dir: [])
+
+    dim, note = cli_main._remote_dimension(cli_main._contract(), tmp_path)
+    assert dim.status == "not_enforced"
+    assert note is None
+
+
+def test_get_required_checks_empty_when_no_config(tmp_path):
+    """v1 schema has no required_checks field -> [] (conservative)."""
+    assert cli_main._get_required_checks(tmp_path) == []
+
+
+def test_get_required_checks_ignores_non_string_entries(tmp_path, monkeypatch):
+    """Non-string entries are filtered out (defensive)."""
+    fake_gov = _ns(required_checks=["ok-check", 123, None, ""])
+    fake_cfg = _ns(governance=fake_gov)
+    monkeypatch.setattr("lacd.config.schema.load_config", lambda p: fake_cfg)
+    assert cli_main._get_required_checks(tmp_path) == ["ok-check"]

@@ -4,8 +4,8 @@
 
 LACD 是一个独立、通用、业务无关的 Agentic 软件开发治理框架。它定义软件项目如何组织 Agent 工作、验证证据、控制变更风险、治理 GitHub 变更，以及如何以受控方式持续采用 LACD 新版本。以 CLI（`lacd`）加版本化模板、Schema、GitHub 集成的形式交付。无中央服务器、无 SaaS、无遥测、不与任何业务项目耦合。
 
-> **状态：v1.0.0 已发布；v1.0.1 开发中。** 见 [CHANGELOG.md](CHANGELOG.md)。
-> 安装：`pip install "git+https://github.com/SkyCjq/LACD.git@v1.0.0"`。
+> **状态：v1.0.1 已发布；v1.0.2 开发中（候选）。** 见 [CHANGELOG.md](CHANGELOG.md)。
+> 安装：`pip install "git+https://github.com/SkyCjq/LACD.git@v1.0.1"`。
 > tag / GitHub Release / 分支保护仍由 Human 执行（见
 > [docs/operations/human-approval.md](docs/operations/human-approval.md)）。
 
@@ -42,7 +42,7 @@ v1.0 **未**发布到 PyPI。请从可验证的源安装：
 
 ```bash
 # 固定 tag：
-pip install "git+https://github.com/SkyCjq/LACD.git@v1.0.0"
+pip install "git+https://github.com/SkyCjq/LACD.git@v1.0.1"
 
 # 或固定到精确 commit（可复现性最强）：
 pip install "git+https://github.com/SkyCjq/LACD.git@<40位commit>"

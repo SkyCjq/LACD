@@ -13,7 +13,7 @@ GitHub PR safeguards, human review, and safe versioned upgrades.
 - Repository: https://github.com/SkyCjq/LACD
 - License: MIT
 - Language: Python 3.11+ (CLI: `lacd`; runtime deps: pyyaml, jsonschema)
-- Install: `pip install "git+https://github.com/SkyCjq/LACD.git@v1.0.0"`
+- Install: `pip install "git+https://github.com/SkyCjq/LACD.git@v1.0.1"`
 
 ## What it is
 

@@ -19,10 +19,17 @@ agentic software development. **No business-project content here, ever.**
 3. Frozen contracts live in `docs/specification/` and
    `docs/architecture/MODULE_CONTRACT.md` — changing them needs an ADR and
    maintainer approval, not a drive-by edit.
-4. Tests: `pytest -q` (full), `pytest tests/unit -q` (fast). New behavior
+4. Review terms (see `docs/specification/PROTOCOL.md` §5 — same names, no
+   second vocabulary): **Q1** = pre-dev independent spec review;
+   **Q2** = independent Web AI review of the PR's final stable HEAD before
+   Human merge (credentialed: reviewer/model/time/reviewed_head_sha/verdict/raw;
+   expires when HEAD moves); **RRC** = post-merge, pre-tag release qualification
+   (not a second Q2); **PRV** = post-release verification. Q2 PASS never
+   replaces Human Merge.
+5. Tests: `pytest -q` (full), `pytest tests/unit -q` (fast). New behavior
    needs real tests; never weaken assertions to go green. New security
    behavior needs a negative test.
-5. Never commit secrets, tokens, or personal data. `lacd verify` before
+6. Never commit secrets, tokens, or personal data. `lacd verify` before
    submitting; evidence binds to the commit SHA.
 
 ## Commands

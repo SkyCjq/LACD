@@ -636,11 +636,40 @@ def _detect_repo_branch(project_dir: Path) -> tuple[str | None, str | None]:
     return repo, branch
 
 
+def _get_required_checks(project_dir: Path) -> list:
+    """Return configured required check names for the enforcement policy.
+
+    Reads the project's validated ``lacd.yaml`` governance section in a
+    forward-compatible way. The v1 schema has no ``required_checks`` field,
+    so this returns [] for v1 configs — the caller then degrades to
+    UNVERIFIED rather than risking a false ENFORCED (fail-closed).
+    """
+    try:
+        from lacd.config.schema import load_config
+        cfg = load_config(project_dir)
+    except Exception:
+        return []
+    gov = getattr(cfg, "governance", None)
+    if gov is None:
+        return []
+    # Forward-compatible: v1 GovernanceSection has no required_checks attr.
+    checks = getattr(gov, "required_checks", None)
+    if not checks:
+        return []
+    return [c for c in checks if isinstance(c, str) and c]
+
+
 def _remote_dimension(contract, project_dir: Path):
     """Compute the remote_enforcement dimension.
 
     Returns (DimensionResult, note). Never raises for a missing module or a
     missing repo: those degrade to unverified with a reason code (AT-07).
+
+    v1.0.2 (FR-102-02): always constructs an explicit ``EnforcementPolicy``
+    from the project's verified configuration and passes it to
+    ``check_remote_enforcement``. The ``policy=None`` legacy path is never
+    used on this path. When no required checks are configured, the dimension
+    degrades to UNVERIFIED (fail-closed, no false ENFORCED).
     """
     try:
         check_remote_enforcement = _get_check_remote_enforcement()
@@ -657,12 +686,30 @@ def _remote_dimension(contract, project_dir: Path):
                                           reasons=["NO_GITHUB_REMOTE"]),
                 "no git origin remote pointing at GitHub; remote enforcement "
                 "cannot be checked")
+    required_checks = _get_required_checks(project_dir)
+    from lacd.github.remote import EnforcementPolicy
+    policy = EnforcementPolicy(
+        policy_version="1",
+        require_pull_request=True,
+        required_checks=required_checks,
+        allow_bypass=False,
+        human_merge_required=True,
+    )
     try:
-        rep = check_remote_enforcement(repo, branch or "main", token=None, timeout=15)
+        rep = check_remote_enforcement(repo, branch or "main", policy=policy,
+                                       token=None, timeout=15)
     except Exception as exc:
         return (contract.DimensionResult(status="unverified",
                                           reasons=["REMOTE_NETWORK_ERROR"]),
                 f"remote check raised {type(exc).__name__}: {exc}")
+    # Fail-closed: with no configured required checks, an "enforced" verdict
+    # would be a false positive (nothing was actually required). Downgrade.
+    if not required_checks and rep.status == "enforced":
+        return (contract.DimensionResult(
+                    status="unverified",
+                    reasons=["REQUIRED_CHECKS_UNCONFIGURED"] + list(rep.reasons)),
+                "no required checks configured for this project; remote "
+                "enforcement cannot be verified (fail-closed)")
     return (contract.DimensionResult(status=rep.status,
                                       reasons=list(rep.reasons)),
             None)
