@@ -16,8 +16,10 @@
 # Action pins (full commit SHAs, verified 2026-10-12 via api.github.com):
 #   actions/checkout v4      -> 11d5960a326750d5838078e36cf38b85af677262
 #   actions/setup-python v5  -> a26af69be951a213d495a4c3e4e4022e16d87065
-# The CLI install step pins the locked LACD release tag. Tag immutability is
-# guaranteed by the LACD Release process (annotated tag, never moved or
+# The CLI install step pins the locked LACD release tag. Tag stability is
+# controlled by the LACD Release process (annotated tag; moves require
+# explicit Human approval and re-verification). Residual risk: tags can be
+# moved by account compromise or force-push; see ADR-0012.
 # deleted); `lacd upgrade` bumps it together with template_version.
 
 name: lacd-verify
@@ -42,7 +44,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install LACD CLI (locked release tag)
-        run: pip install "git+https://github.com/SkyCjq/LACD.git@v1.0.0"
+        run: pip install "git+https://github.com/SkyCjq/LACD.git@v1.0.2"
 
       - name: Show LACD version
         run: lacd --version

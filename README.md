@@ -9,8 +9,8 @@ adopt new LACD versions in a controlled way. It ships as a CLI (`lacd`)
 plus versioned templates, schemas, and GitHub integration. No central
 server, no SaaS, no telemetry, no business-project coupling.
 
-> **Status: v1.0.0 released; v1.0.1 in development.** See [CHANGELOG.md](CHANGELOG.md).
-> Install: `pip install "git+https://github.com/SkyCjq/LACD.git@v1.0.0"`.
+> **Status: v1.0.1 released; v1.0.2 in development (candidate).** See [CHANGELOG.md](CHANGELOG.md).
+> Install: `pip install "git+https://github.com/SkyCjq/LACD.git@v1.0.1"`.
 > Tag / GitHub Release / branch protection remain Human actions (see
 > [docs/operations/human-approval.md](docs/operations/human-approval.md)).
 
@@ -70,7 +70,7 @@ v1.0 is **not** published to PyPI. Install from a verifiable source:
 
 ```bash
 # From a fixed tag:
-pip install "git+https://github.com/SkyCjq/LACD.git@v1.0.0"
+pip install "git+https://github.com/SkyCjq/LACD.git@v1.0.1"
 
 # Or pin to an exact commit (strongest reproducibility):
 pip install "git+https://github.com/SkyCjq/LACD.git@<40-hex-commit>"

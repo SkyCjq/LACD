@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lacd"
-version = "1.0.1"
+version = "1.0.2"
 description = "Lightweight Agentic Collaborative Development - governance and collaboration framework for agentic software development"
 readme = "README.md"
 requires-python = ">=3.11"

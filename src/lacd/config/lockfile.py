@@ -180,6 +180,7 @@ class LockFile:
     shared_files: list[SharedFileEntry] = field(default_factory=list)
     generated_at: str = ""
     generated_by: str = ""
+    required_checks: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, d: dict) -> "LockFile":
@@ -194,6 +195,7 @@ class LockFile:
             shared_files=[SharedFileEntry.from_dict(e) for e in d.get("shared_files", [])],
             generated_at=d.get("generated_at", ""),
             generated_by=d.get("generated_by", ""),
+            required_checks=list(d.get("required_checks", [])),
         )
 
     def to_dict(self) -> dict:

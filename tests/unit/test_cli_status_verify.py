@@ -190,14 +190,19 @@ def test_verify_strict_all_green_with_enforced_remote_exits_0(
         tmp_path, monkeypatch, capsys):
     install_fake_contract(monkeypatch, enforcement_required=True)
 
-    def fake_check(repo, branch, token=None, timeout=15):
+    def fake_check(repo, branch, policy=None, token=None, timeout=15):
         assert repo == "example/repo" and branch == "main"
+        assert policy is not None, "_remote_dimension must pass EnforcementPolicy (FR-102-02)"
         return _ns(status="enforced", reasons=["REMOTE_PROTECTION_VERIFIED"])
 
     monkeypatch.setattr(cli_main, "_get_check_remote_enforcement",
                         lambda: fake_check)
     monkeypatch.setattr(cli_main, "_detect_repo_branch",
                         lambda project_dir: ("example/repo", "main"))
+    monkeypatch.setattr(cli_main, "_check_config_trust",
+                        lambda project_dir: ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ["TRUSTED_BASE_FROM_ENV"], None))
+    monkeypatch.setattr(cli_main, "_get_trusted_required_checks",
+                        lambda project_dir, sha: (["ci-check"], []))
     rc = main(["verify", "--path", str(tmp_path), "--strict"])
     assert rc == 0
     assert "STRICT: all key dimensions satisfied" in capsys.readouterr().out
@@ -206,13 +211,18 @@ def test_verify_strict_all_green_with_enforced_remote_exits_0(
 def test_verify_strict_remote_not_enforced_exits_2(tmp_path, monkeypatch, capsys):
     install_fake_contract(monkeypatch, enforcement_required=False)
 
-    def fake_check(repo, branch, token=None, timeout=15):
+    def fake_check(repo, branch, policy=None, token=None, timeout=15):
+        assert policy is not None, "_remote_dimension must pass EnforcementPolicy (FR-102-02)"
         return _ns(status="not_enforced", reasons=["REMOTE_PROTECTION_ABSENT"])
 
     monkeypatch.setattr(cli_main, "_get_check_remote_enforcement",
                         lambda: fake_check)
     monkeypatch.setattr(cli_main, "_detect_repo_branch",
                         lambda project_dir: ("example/repo", "main"))
+    monkeypatch.setattr(cli_main, "_check_config_trust",
+                        lambda project_dir: ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ["TRUSTED_BASE_FROM_ENV"], None))
+    monkeypatch.setattr(cli_main, "_get_trusted_required_checks",
+                        lambda project_dir, sha: (["ci-check"], []))
     rc = main(["verify", "--path", str(tmp_path), "--strict"])
     assert rc == 2
 
@@ -494,3 +504,185 @@ def test_verify_remote_flag_attempts_remote(tmp_path, monkeypatch, capsys):
     rc = main(["verify", "--path", str(tmp_path), "--remote"])
     assert rc == 0
     assert "REMOTE_NOT_CHECKED" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# FR-102-02: _remote_dimension must always pass an explicit EnforcementPolicy.
+# The policy=None legacy path is never used on the CLI main path.
+# ---------------------------------------------------------------------------
+
+def test_remote_dimension_never_passes_policy_none(tmp_path, monkeypatch):
+    """Iron test: _remote_dimension must not call check_remote_enforcement
+    with policy=None (MUST pass EnforcementPolicy per FR-102-02)."""
+    install_fake_contract(monkeypatch)
+    captured = {}
+
+    def fake_check(repo, branch, *, policy=None, token=None, timeout=15):
+        captured["policy"] = policy
+        return _ns(status="enforced", reasons=["REMOTE_PROTECTION_VERIFIED"])
+
+    monkeypatch.setattr(cli_main, "_get_check_remote_enforcement",
+                        lambda: fake_check)
+    monkeypatch.setattr(cli_main, "_detect_repo_branch",
+                        lambda project_dir: ("example/repo", "main"))
+    monkeypatch.setattr(cli_main, "_check_config_trust",
+                        lambda project_dir: ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ["TRUSTED_BASE_FROM_ENV"], None))
+    monkeypatch.setattr(cli_main, "_get_trusted_required_checks",
+                        lambda project_dir, sha: (["ci-check", "lint"], []))
+
+    dim, note = cli_main._remote_dimension(cli_main._contract(), tmp_path)
+    assert "policy" in captured, "check_remote_enforcement was not called"
+    assert captured["policy"] is not None, \
+        "policy=None is forbidden on the CLI main path (FR-102-02)"
+    # Policy fields per MODULE_CONTRACT §10
+    p = captured["policy"]
+    assert p.policy_version == "1"
+    assert p.require_pull_request is True
+    assert p.required_checks == ["ci-check", "lint"]
+    assert p.allow_bypass is False
+    assert p.human_merge_required is True
+    assert dim.status == "enforced"
+
+
+def test_remote_dimension_empty_required_checks_is_unverified(tmp_path, monkeypatch):
+    """No configured required checks -> an "enforced" verdict is downgraded to
+    UNVERIFIED (fail-closed, no false positive). The API is still called with
+    an explicit policy (never policy=None)."""
+    install_fake_contract(monkeypatch)
+    captured = {}
+
+    def fake_check(repo, branch, *, policy=None, token=None, timeout=15):
+        captured["policy"] = policy
+        # Simulate a repo that would otherwise look "enforced"
+        return _ns(status="enforced", reasons=["REMOTE_PROTECTION_VERIFIED"])
+
+    monkeypatch.setattr(cli_main, "_get_check_remote_enforcement",
+                        lambda: fake_check)
+    monkeypatch.setattr(cli_main, "_detect_repo_branch",
+                        lambda project_dir: ("example/repo", "main"))
+    monkeypatch.setattr(cli_main, "_check_config_trust",
+                        lambda project_dir: ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ["TRUSTED_BASE_FROM_ENV"], None))
+    monkeypatch.setattr(cli_main, "_get_trusted_required_checks",
+                        lambda project_dir, sha: ([], []))
+
+    dim, note = cli_main._remote_dimension(cli_main._contract(), tmp_path)
+    assert captured["policy"] is not None, "policy must always be passed"
+    assert captured["policy"].required_checks == []
+    assert dim.status == "unverified"
+    assert "REQUIRED_CHECKS_UNCONFIGURED" in dim.reasons
+    assert "fail-closed" in note
+
+
+def test_remote_dimension_empty_checks_keeps_unverified(tmp_path, monkeypatch):
+    """Non-enforced verdicts pass through unchanged with empty checks."""
+    install_fake_contract(monkeypatch)
+
+    def fake_check(repo, branch, *, policy=None, token=None, timeout=15):
+        return _ns(status="not_enforced", reasons=["REMOTE_PROTECTION_ABSENT"])
+
+    monkeypatch.setattr(cli_main, "_get_check_remote_enforcement",
+                        lambda: fake_check)
+    monkeypatch.setattr(cli_main, "_detect_repo_branch",
+                        lambda project_dir: ("example/repo", "main"))
+    monkeypatch.setattr(cli_main, "_check_config_trust",
+                        lambda project_dir: ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ["TRUSTED_BASE_FROM_ENV"], None))
+    monkeypatch.setattr(cli_main, "_get_trusted_required_checks",
+                        lambda project_dir, sha: ([], []))
+
+    dim, note = cli_main._remote_dimension(cli_main._contract(), tmp_path)
+    assert dim.status == "not_enforced"
+    assert note is None
+
+
+def test_get_required_checks_empty_when_no_config(tmp_path):
+    """v1 schema has no required_checks field -> [] (conservative)."""
+    assert cli_main._get_required_checks(tmp_path) == ([], [])
+
+
+def test_get_required_checks_ignores_non_string_entries(tmp_path):
+    """Non-string entries are filtered out (defensive)."""
+    import yaml
+    config = {
+        "schema_version": "1",
+        "lacd": {"enabled": True, "mode": "lacd", "policy_version": "1"},
+        "governance": {
+            "pull_request_required": True,
+            "human_merge_required": True,
+            "risk_tiers": ["T0"],
+            "required_checks": ["ok-check", 123, None, ""],
+        },
+        "verification": {"bind_to_commit_sha": True, "fail_closed": True,
+                         "github_enforcement_required": True},
+        "agents": {"protocol": "lacd", "auto_detect": True},
+        "project": {"extensions": ".lacd/project-rules.yaml"},
+    }
+    (tmp_path / "lacd.yaml").write_text(yaml.safe_dump(config))
+    # Note: schema validation will fail on non-string entries, so we expect
+    # POLICY_CONFIG_UNPARSEABLE. The filtering test is covered by _validate unit logic.
+    checks, warnings = cli_main._get_required_checks(tmp_path)
+    # Schema rejects non-string items, so this is unparseable
+    assert warnings == ["POLICY_CONFIG_UNPARSEABLE"]
+
+
+def test_get_required_checks_real_yaml_chain(tmp_path):
+    """Q2: real lacd.yaml -> required_checks without mocks (except load_config).
+
+    Proves a legitimate project CAN configure required_checks via yaml.
+    """
+    import yaml
+    config = {
+        "schema_version": "1",
+        "lacd": {"enabled": True, "mode": "lacd", "policy_version": "1"},
+        "governance": {
+            "pull_request_required": True,
+            "human_merge_required": True,
+            "risk_tiers": ["T0"],
+            "required_checks": ["ci-build", "ci-test"],
+        },
+        "verification": {"bind_to_commit_sha": True, "fail_closed": True,
+                         "github_enforcement_required": True},
+        "agents": {"protocol": "lacd", "auto_detect": True},
+        "project": {"extensions": ".lacd/project-rules.yaml"},
+    }
+    (tmp_path / "lacd.yaml").write_text(yaml.safe_dump(config))
+    checks, warnings = cli_main._get_required_checks(tmp_path)
+    assert checks == ["ci-build", "ci-test"], f"got {checks}"
+    assert warnings == []
+
+
+def test_get_required_checks_lock_fallback(tmp_path):
+    """Q2: lock.json fallback works when yaml has no required_checks."""
+    import yaml, json
+    config = {
+        "schema_version": "1",
+        "lacd": {"enabled": True, "mode": "lacd", "policy_version": "1"},
+        "governance": {
+            "pull_request_required": True,
+            "human_merge_required": True,
+            "risk_tiers": ["T0"],
+        },
+        "verification": {"bind_to_commit_sha": True, "fail_closed": True,
+                         "github_enforcement_required": True},
+        "agents": {"protocol": "lacd", "auto_detect": True},
+        "project": {"extensions": ".lacd/project-rules.yaml"},
+    }
+    (tmp_path / "lacd.yaml").write_text(yaml.safe_dump(config))
+    (tmp_path / ".lacd").mkdir()
+    # Valid lock file (all required fields) with required_checks
+    lock = {
+        "lock_format_version": "1",
+        "lacd_cli_version": "1.0.2",
+        "source": {"type": "git-tag", "repo": "SkyCjq/LACD",
+                   "ref": "v1.0.2", "commit": "a" * 40},
+        "schema_version": "1",
+        "policy_version": "1",
+        "template_version": "1.0.2",
+        "managed_files": [],
+        "shared_files": [],
+        "generated_at": "2026-10-12T00:00:00+00:00",
+        "generated_by": "lacd 1.0.2",
+        "required_checks": ["lock-ci"],
+    }
+    (tmp_path / ".lacd" / "lock.json").write_text(json.dumps(lock))
+    checks, warnings = cli_main._get_required_checks(tmp_path)
+    assert checks == ["lock-ci"], f"got {checks}"

@@ -32,6 +32,10 @@ Python 3.11+ required. Runtime dependencies are intentionally minimal
 - All changes go through PRs — never push to `main` directly.
 - CI must be green (`pytest --cov=lacd --cov-fail-under=80`).
 - A maintainer merges. Contributors never merge their own PRs.
+- Review terms follow `docs/specification/PROTOCOL.md` §5: **Q1** (pre-dev),
+  **Q2** (independent review of the final stable HEAD before merge),
+  **RRC** (post-merge release qualification), **PRV** (post-release verification).
+  A Q2 `PASS` is a recommendation, never a merge authorization.
 
 ## Release process (maintainers)
 

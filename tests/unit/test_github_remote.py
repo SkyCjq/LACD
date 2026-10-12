@@ -420,3 +420,85 @@ def test_policy_network_error_is_unverified(monkeypatch):
     rep = _run(monkeypatch, _ppolicy(), protection="network")
     assert rep.status == "unverified"
     assert REMOTE_NETWORK_ERROR in rep.reasons
+
+
+# ---------------------------------------------------------------------------
+# v1.0.2 additions: policy-mandatory path coverage (D2)
+# ---------------------------------------------------------------------------
+
+def test_policy_no_token_is_unverified_with_policy_version(monkeypatch):
+    """No token + policy: unverified, no HTTP request, policy_version recorded.
+
+    The v1.0.1 no-token test only covered the legacy (policy=None) path.
+    The strict path must also fail closed without a credential.
+    """
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    def _boom(req, timeout=None):
+        raise AssertionError("no HTTP request should be attempted without a token")
+
+    monkeypatch.setattr(urllib.request, "urlopen", _boom)
+    policy = EnforcementPolicy(required_checks=["ci"])
+    report = check_remote_enforcement(REPO, BRANCH, policy=policy, token=None)
+    assert report.status == "unverified"
+    assert report.status != "enforced"
+    assert REMOTE_NO_CREDENTIAL in report.reasons
+    assert report.details.get("policy_version") == "1"
+
+
+def test_policy_empty_required_checks_list_skips_check_item(monkeypatch):
+    """required_checks=[] means the check item is not evaluated at all.
+
+    An empty list must not produce a vacuous 'satisfied' required_checks item
+    nor a missing entry — the item is simply absent from details.
+    """
+    rep = _run(monkeypatch, _ppolicy(required_checks=[]))
+    assert rep.status == "enforced"
+    assert "required_checks" not in rep.details["items"]
+
+
+def test_policy_pr_not_required_skips_pr_item(monkeypatch):
+    """require_pull_request=False: PR item absent; checks alone can enforce."""
+    rep = _run(monkeypatch,
+               _ppolicy(require_pull_request=False, required_checks=["ci"]),
+               protection=_classic(pr_reviews=False, checks=["ci"]))
+    assert rep.status == "enforced"
+    assert "require_pull_request" not in rep.details["items"]
+    assert rep.details["items"]["required_checks"]["satisfied"] is True
+
+
+def test_remote_dimension_never_calls_with_policy_none(monkeypatch, tmp_path):
+    """D2 (freeze §10): _remote_dimension must construct an EnforcementPolicy
+    and pass it to check_remote_enforcement — never policy=None.
+
+    This is the CLI main-path wiring assertion. The legacy branch stays in
+    remote.py for backward compatibility but is banned from the CLI path.
+    """
+    import lacd.cli.main as cli_main
+
+    seen = {}
+
+    def fake_check(repo, branch, *, policy=None, token=None, timeout=15):
+        seen["policy"] = policy
+        return remote.EnforcementReport(status="unverified",
+                                        reasons=["TEST_STUB"], details={})
+
+    monkeypatch.setattr(cli_main, "_get_check_remote_enforcement",
+                        lambda: fake_check)
+    monkeypatch.setattr(cli_main, "_detect_repo_branch",
+                        lambda p: ("octo/hello", "main"))
+    monkeypatch.setattr(cli_main, "_check_config_trust",
+                        lambda p: ("a" * 40, ["TRUSTED_BASE_FROM_ENV"], None))
+    monkeypatch.setattr(cli_main, "_get_trusted_required_checks",
+                        lambda p, sha: (["ci"], []))
+
+    class _Contract:
+        @staticmethod
+        def DimensionResult(status, reasons):
+            return (status, list(reasons))
+
+    cli_main._remote_dimension(_Contract(), tmp_path)
+    assert isinstance(seen.get("policy"), remote.EnforcementPolicy), (
+        "D2 violation: _remote_dimension called check_remote_enforcement "
+        f"with policy={seen.get('policy')!r}; an EnforcementPolicy is required")
+    assert seen["policy"].policy_version == "1"

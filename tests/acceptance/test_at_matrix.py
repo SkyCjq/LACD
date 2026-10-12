@@ -63,7 +63,7 @@ def _tree_hashes(path: Path) -> dict:
 def _make_upstream(base: Path, versions: dict) -> Path:
     """Build a file:// upstream: base/releases.json + per-version bundle dirs.
 
-    versions: {"1.0.1": {"workflow_note": "...", "agents_note": "..."}, ...}
+    versions: {"1.0.3": {"workflow_note": "...", "agents_note": "..."}, ...}
     Each version gets upstream/bundles/<v>/{manifest.json, releases.json? no}.
     releases.json lives at upstream root; bundle dirs hold that version's
     templates. Template content derives from the real shipped templates so
@@ -314,18 +314,18 @@ def test_at_09_cli_lock_version_mismatch_detected(tmp_path, capsys):
 def test_at_10_two_projects_two_versions_coexist(tmp_path, capsys):
     """AT-10: Alpha and Beta lock different template versions independently."""
     upstream = _make_upstream(tmp_path, {
-        "1.0.1": {"workflow_note": "# v1.0.1"}})
+        "1.0.3": {"workflow_note": "# v1.0.1"}})
     alpha = _adopted(tmp_path, "alpha")
     beta = _adopted(tmp_path, "beta")
     _lacd_init(alpha)
     _lacd_init(beta)
     # upgrade only alpha to 1.0.1
-    rc = cli(["upgrade", "--to", "1.0.1", "--path", str(alpha), "--yes",
-              "--template-dir", str(_bundle_dir(upstream, "1.0.1"))])
+    rc = cli(["upgrade", "--to", "1.0.3", "--path", str(alpha), "--yes",
+              "--template-dir", str(_bundle_dir(upstream, "1.0.3"))])
     assert rc == 0
     da = _status_json(alpha, capsys)
     db = _status_json(beta, capsys)
-    assert da["versions"]["template"] == "1.0.1"
+    assert da["versions"]["template"] == "1.0.3"
     assert db["versions"]["template"] == CLI_VERSION
     assert da["state"] == "VALIDATED" and db["state"] == "VALIDATED"
 
@@ -337,7 +337,7 @@ def test_at_10_two_projects_two_versions_coexist(tmp_path, capsys):
 def test_at_11_check_classifies_patch_minor_major(tmp_path, capsys):
     """AT-11: --check distinguishes Patch/Minor/Major from a version source."""
     # Upstream versions are derived from the running CLI version (not
-    # hardcoded): after a version bump, "1.0.1" is no longer a patch upgrade.
+    # hardcoded): after a version bump, "1.0.3" is no longer a patch upgrade.
     major, minor, patch = (int(x) for x in CLI_VERSION.split("."))
     v_patch = f"{major}.{minor}.{patch + 1}"
     v_minor = f"{major}.{minor + 1}.0"
@@ -381,27 +381,27 @@ def test_at_12_broken_source_never_reports_latest(tmp_path, capsys):
 
 def test_at_13_dry_run_touches_nothing(tmp_path, capsys):
     """AT-13: --dry-run lists changes and leaves the worktree byte-identical."""
-    upstream = _make_upstream(tmp_path, {"1.0.1": {"workflow_note": "# new"}})
+    upstream = _make_upstream(tmp_path, {"1.0.3": {"workflow_note": "# new"}})
     proj = _adopted(tmp_path, "alpha")
     _lacd_init(proj)
     before = _tree_hashes(proj)
-    rc = cli(["upgrade", "--dry-run", "--to", "1.0.1", "--path", str(proj),
-              "--template-dir", str(_bundle_dir(upstream, "1.0.1"))])
+    rc = cli(["upgrade", "--dry-run", "--to", "1.0.3", "--path", str(proj),
+              "--template-dir", str(_bundle_dir(upstream, "1.0.3"))])
     assert rc == 0
     assert _tree_hashes(proj) == before
     out = capsys.readouterr().out
-    assert "1.0.1" in out and "dry-run" in out.lower()
+    assert "1.0.3" in out and "dry-run" in out.lower()
 
 
 def test_at_14_upgrade_preserves_project_content(tmp_path):
     """AT-14: migration keeps project-owned rules and existing CI."""
-    upstream = _make_upstream(tmp_path, {"1.0.1": {"workflow_note": "# new"}})
+    upstream = _make_upstream(tmp_path, {"1.0.3": {"workflow_note": "# new"}})
     seed = {".github/workflows/ci.yml": "name: mine\n",
             ".lacd/project-rules.yaml": "rules:\n  - keep-me\n"}
     proj = _adopted(tmp_path, "beta", preexisting=seed)
     _lacd_init(proj)
-    rc = cli(["upgrade", "--to", "1.0.1", "--path", str(proj), "--yes",
-              "--template-dir", str(_bundle_dir(upstream, "1.0.1"))])
+    rc = cli(["upgrade", "--to", "1.0.3", "--path", str(proj), "--yes",
+              "--template-dir", str(_bundle_dir(upstream, "1.0.3"))])
     assert rc == 0
     assert (proj / ".github" / "workflows" / "ci.yml").read_text() == \
         "name: mine\n"
@@ -412,15 +412,15 @@ def test_at_14_upgrade_preserves_project_content(tmp_path):
 
 def test_at_15_conflict_never_silently_overwrites(tmp_path, capsys):
     """AT-15: user-modified managed content -> conflict, refused, intact."""
-    upstream = _make_upstream(tmp_path, {"1.0.1": {"workflow_note": "# new"}})
+    upstream = _make_upstream(tmp_path, {"1.0.3": {"workflow_note": "# new"}})
     proj = _adopted(tmp_path, "alpha")
     _lacd_init(proj)
     wf = proj / ".github" / "workflows" / "lacd-verify.yml"
     user_text = wf.read_text() + "# user tweak\n"
     wf.write_text(user_text)
     _commit_all(proj, "user tweak")
-    rc = cli(["upgrade", "--to", "1.0.1", "--path", str(proj), "--yes",
-              "--template-dir", str(_bundle_dir(upstream, "1.0.1"))])
+    rc = cli(["upgrade", "--to", "1.0.3", "--path", str(proj), "--yes",
+              "--template-dir", str(_bundle_dir(upstream, "1.0.3"))])
     assert rc == 3
     assert wf.read_text() == user_text  # untouched
     assert "conflict" in capsys.readouterr().err.lower()
@@ -453,7 +453,7 @@ def test_at_16_prepare_pr_creates_branch_and_pr(tmp_path, monkeypatch):
     The real-PR demonstration is the LACD repo's own implementation PRs
     (dogfooding); see the acceptance report.
     """
-    upstream = _make_upstream(tmp_path, {"1.0.1": {"workflow_note": "# new"}})
+    upstream = _make_upstream(tmp_path, {"1.0.3": {"workflow_note": "# new"}})
     proj = _adopted(tmp_path, "alpha")
     _lacd_init(proj)
     _git(["remote", "add", "origin", "https://github.com/o/r.git"], proj)
@@ -464,21 +464,21 @@ def test_at_16_prepare_pr_creates_branch_and_pr(tmp_path, monkeypatch):
     import os as _os
     _os.environ["GITHUB_TOKEN"] = "fake-token-for-test"
     try:
-        rc = cli(["upgrade", "--to", "1.0.1", "--path", str(proj), "--yes",
+        rc = cli(["upgrade", "--to", "1.0.3", "--path", str(proj), "--yes",
                   "--prepare-pr", "--template-dir",
-                  str(_bundle_dir(upstream, "1.0.1"))])
+                  str(_bundle_dir(upstream, "1.0.3"))])
     finally:
         del _os.environ["GITHUB_TOKEN"]
     assert rc == 0
     posts = [c for c in api_calls if c[0] == "POST"]
     assert len(posts) == 1
     payload = posts[0][2]
-    assert payload["head"] == "lacd/upgrade-to-1.0.1"
+    assert payload["head"] == "lacd/upgrade-to-1.0.3"
     assert payload["base"] == "main"
     assert "Human checkpoints" in payload["body"]
     # upgrade branch exists locally with the migration commit
     branches = _git(["branch", "--list"], proj)
-    assert "lacd/upgrade-to-1.0.1" in branches
+    assert "lacd/upgrade-to-1.0.3" in branches
 
 
 def test_at_16_prepare_pr_dedupes(tmp_path, monkeypatch, capsys):
@@ -492,16 +492,16 @@ def test_at_16_prepare_pr_dedupes(tmp_path, monkeypatch, capsys):
         raise AssertionError("must not create a second PR")
 
     monkeypatch.setattr(pr_mod, "_api_request", fake_api)
-    upstream = _make_upstream(tmp_path, {"1.0.1": {}})
+    upstream = _make_upstream(tmp_path, {"1.0.3": {}})
     proj = _adopted(tmp_path, "alpha")
     _lacd_init(proj)
     _git(["remote", "add", "origin", "https://github.com/o/r.git"], proj)
     import os as _os
     _os.environ["GITHUB_TOKEN"] = "fake"
     try:
-        rc = cli(["upgrade", "--to", "1.0.1", "--path", str(proj), "--yes",
+        rc = cli(["upgrade", "--to", "1.0.3", "--path", str(proj), "--yes",
                   "--prepare-pr", "--template-dir",
-                  str(_bundle_dir(upstream, "1.0.1"))])
+                  str(_bundle_dir(upstream, "1.0.3"))])
     finally:
         del _os.environ["GITHUB_TOKEN"]
     assert rc == 0
@@ -521,7 +521,7 @@ def test_at_17_major_needs_explicit_acceptance(tmp_path, capsys):
 
 def test_at_18_pr_never_pushes_base_or_merges(tmp_path, monkeypatch):
     """AT-18: --prepare-pr never pushes main, never merges, no dupes."""
-    upstream = _make_upstream(tmp_path, {"1.0.1": {"workflow_note": "# new"}})
+    upstream = _make_upstream(tmp_path, {"1.0.3": {"workflow_note": "# new"}})
     proj = _adopted(tmp_path, "alpha")
     _lacd_init(proj)
     _git(["remote", "add", "origin", "https://github.com/o/r.git"], proj)
@@ -538,14 +538,14 @@ def test_at_18_pr_never_pushes_base_or_merges(tmp_path, monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", spy_run)
     _fake_pr_api(monkeypatch)
-    rc = cli(["upgrade", "--to", "1.0.1", "--path", str(proj), "--yes",
+    rc = cli(["upgrade", "--to", "1.0.3", "--path", str(proj), "--yes",
               "--prepare-pr", "--template-dir",
-              str(_bundle_dir(upstream, "1.0.1"))])
+              str(_bundle_dir(upstream, "1.0.3"))])
     assert rc == 0
     for cmd in pushed:
         assert "main" not in cmd  # never pushes the base branch
     # patch fallback written when push is impossible
-    assert (proj / ".lacd" / "upgrade-1.0.1.patch").is_file()
+    assert (proj / ".lacd" / "upgrade-1.0.3.patch").is_file()
     # main branch itself has no upgrade commit
     log = _git(["log", "--oneline", "main"], proj)
     assert "upgrade" not in log.lower()
@@ -557,11 +557,11 @@ def test_at_18_pr_never_pushes_base_or_merges(tmp_path, monkeypatch):
 
 def test_at_19_upgrade_idempotent(tmp_path):
     """AT-19: re-running the same upgrade produces no diff."""
-    upstream = _make_upstream(tmp_path, {"1.0.1": {"workflow_note": "# new"}})
+    upstream = _make_upstream(tmp_path, {"1.0.3": {"workflow_note": "# new"}})
     proj = _adopted(tmp_path, "alpha")
     _lacd_init(proj)
-    args = ["upgrade", "--to", "1.0.1", "--path", str(proj), "--yes",
-            "--template-dir", str(_bundle_dir(upstream, "1.0.1"))]
+    args = ["upgrade", "--to", "1.0.3", "--path", str(proj), "--yes",
+            "--template-dir", str(_bundle_dir(upstream, "1.0.3"))]
     assert cli(args) == 0
     _commit_all(proj, "upgrade 1.0.1")
     before = _tree_hashes(proj)
@@ -576,13 +576,13 @@ def test_at_19_upgrade_idempotent(tmp_path):
 def test_at_20_rollback_restores(tmp_path):
     """AT-20: a failed/undone upgrade can be rolled back from backup."""
     from lacd.upgrade.migrate import rollback_last
-    upstream = _make_upstream(tmp_path, {"1.0.1": {"workflow_note": "# new"}})
+    upstream = _make_upstream(tmp_path, {"1.0.3": {"workflow_note": "# new"}})
     proj = _adopted(tmp_path, "alpha")
     _lacd_init(proj)
     wf = proj / ".github" / "workflows" / "lacd-verify.yml"
     original = wf.read_bytes()
-    assert cli(["upgrade", "--to", "1.0.1", "--path", str(proj), "--yes",
-                "--template-dir", str(_bundle_dir(upstream, "1.0.1"))]) == 0
+    assert cli(["upgrade", "--to", "1.0.3", "--path", str(proj), "--yes",
+                "--template-dir", str(_bundle_dir(upstream, "1.0.3"))]) == 0
     assert wf.read_bytes() != original
     assert rollback_last(str(proj)) is True
     assert wf.read_bytes() == original
@@ -626,7 +626,7 @@ def test_at_23_tampered_bundle_rejected(tmp_path):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
         z.writestr("manifest.json", json.dumps(
-            {"template_version": "1.0.1", "files": []}))
+            {"template_version": "1.0.3", "files": []}))
     data = buf.getvalue()
     with pytest.raises(BundleVerificationError):
         load_bundle_from_zip(data, "0" * 64)

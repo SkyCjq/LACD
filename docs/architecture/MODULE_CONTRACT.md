@@ -521,3 +521,32 @@ def parse_template_bundle(release: dict) -> dict | None:
 ### 锁文件（`config/lockfile.py`）
 - `source` 段新增可选 `commit`（完整 SHA）与派生 `pin_strength: strong|tag-only`。
 - v1.0.0 锁（无 commit）可读；`verify` 对 `tag-only` 明确标注，不谎称强锁定。
+
+---
+
+## §10. v1.0.2 增量（2026-10-12 Freeze）
+
+### CLI 远端路径（`cli/main.py::_remote_dimension`）
+```python
+def _remote_dimension(contract, project_dir: Path):
+    # 必须构造 EnforcementPolicy 并传入；禁止 policy=None。
+    policy = EnforcementPolicy(
+        policy_version="1",
+        require_pull_request=True,
+        required_checks=[...],  # 来源于项目已验证配置
+        allow_bypass=False,
+        human_merge_required=True,
+    )
+    rep = check_remote_enforcement(repo, branch, policy=policy, token=None, timeout=15)
+```
+- 测试铁律：`_remote_dimension` 的任何调用路径不得以 `policy=None` 进入
+  `check_remote_enforcement`（mock 断言）；且必须验证 policy **内容**
+  （`policy_version=="1"`、`required_checks` 与配置来源一致），不仅是非空。
+
+### 模板（`templates/workflows/lacd-verify.yml`）
+- `pip install` 行与模板 `template_version` 一致（`@vX.Y.Z` tag 形式）；
+  `manifest.json` 的 sha256 为模板文件的真实哈希。
+
+### 审查 SOP（`docs/specification/PROTOCOL.md` 增量）
+- Q1/Q2/RRC/PRV 四术语定义、Q2 凭据字段（`reviewer/model/time/reviewed_head_sha/verdict/raw`）、
+  过期规则（**任何** HEAD 变化 → 重审，无"实质"例外）。

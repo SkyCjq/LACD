@@ -1,0 +1,11 @@
+{
+  "tag_name": "v1.0.1",
+  "body": "## LACD v1.0.1 — patch release\r\n\r\nBackward-compatible patch. Fixes real v1.0.0 defects and hardens the release/CI/governance chain.\r\n\r\n**Fixed**\r\n- Wheel now ships `templates/` — clean `pip install` + `lacd init` works (was `FileNotFoundError`)\r\n- Release bundle discovery: `parse_template_bundle()` supports three fail-closed formats\r\n- `ENFORCED` no longer a false positive: versioned `EnforcementPolicy` verifies each item; unverifiable → `UNVERIFIED`\r\n- Removed tracked `build/`/`.coverage`; `PRODUCT.md` independence fix\r\n\r\n**Added**\r\n- `lacd verify --local` (zero network, for low-privilege adopter CI) / `--remote`\r\n- `status --json`: `dimensions.remote_enforcement.query` (`live|not_queried`)\r\n- `lock.json` `source.commit` + `pin_strength` (`strong|tag-only`)\r\n- `.github/CODEOWNERS`, `llms.txt`, `docs/agents/`, `docs/discoverability/`\r\n- README (EN/ZH) rewritten: positioning, FAQ, limitations — every claim backed by a runnable feature\r\n\r\n**Tests**: 370 passed, 1 skipped (live-token) · Full matrix: `docs/v101-acceptance-matrix.md`\r\n\r\n**Install**: `pip install \"git+https://github.com/SkyCjq/LACD.git@v1.0.1\"`\r\n\r\n## Template bundle\r\n\r\n`lacd-templates-1.0.1.zip` — SHA-256 verified by `lacd upgrade` before use:\r\n\r\n```json\r\n{\"template_bundle\": {\"url\": \"https://github.com/SkyCjq/LACD/releases/download/v1.0.1/lacd-templates-1.0.1.zip\", \"sha256\": \"a01c9e4f0227a35ff3755af891962840706bb408b50470c66bf03159e7e7ec51\"}}\r\n```\r\nTemplate-Bundle-SHA256: a01c9e4f0227a35ff3755af891962840706bb408b50470c66bf03159e7e7ec51",
+  "assets": [
+    {
+      "name": "lacd-templates-1.0.1.zip",
+      "browser_download_url": "https://github.com/SkyCjq/LACD/releases/download/v1.0.1/lacd-templates-1.0.1.zip",
+      "size": 3335
+    }
+  ]
+}

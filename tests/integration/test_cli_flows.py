@@ -381,11 +381,17 @@ def test_flow_strict_passes_when_remote_enforced(git_project, monkeypatch, capsy
     assert main(["init", "--path", str(p)]) == 0
     capsys.readouterr()
 
-    def fake_check(repo, branch, token=None, timeout=15):
+    def fake_check(repo, branch, policy=None, token=None, timeout=15):
+        assert policy is not None, "FR-102-02: policy required"
+        assert policy.required_checks == ["ci-check"]
         return _ns(status="enforced", reasons=["REMOTE_PROTECTION_VERIFIED"])
 
     monkeypatch.setattr(cli_main, "_get_check_remote_enforcement",
                         lambda: fake_check)
+    monkeypatch.setattr(cli_main, "_check_config_trust",
+                        lambda project_dir: ("a" * 40, ["TRUSTED_BASE_FROM_ENV"], None))
+    monkeypatch.setattr(cli_main, "_get_trusted_required_checks",
+                        lambda project_dir, sha: (["ci-check"], []))
     assert main(["verify", "--path", str(p), "--strict"]) == 0
     out = capsys.readouterr().out
     assert "remote_enforcement: enforced" in out

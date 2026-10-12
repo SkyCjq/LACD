@@ -31,7 +31,7 @@ def _uargs(proj, upstream, ver, *extra):
 
 def test_alpha_full_lifecycle(tmp_path, capsys):
     upstream = _make_upstream(tmp_path, {
-        "1.0.1": {"workflow_note": "# alpha-1.0.1"},
+        "1.0.3": {"workflow_note": "# alpha-1.0.1"},
         "1.1.0": {"workflow_note": "# alpha-1.1.0"},
     })
     alpha = _adopted(tmp_path, "alpha")
@@ -46,22 +46,22 @@ def test_alpha_full_lifecycle(tmp_path, capsys):
     assert cli(["upgrade", "--check", "--path", str(alpha),
                 "--template-dir", str(_bundle_dir(upstream, "1.1.0"))]) == 0
     out = capsys.readouterr().out
-    assert "1.0.1" in out and "1.1.0" in out
+    assert "1.0.3" in out and "1.1.0" in out
 
     # dry-run touches nothing
     before = _tree_hashes(alpha)
-    assert cli(["upgrade", "--dry-run", "--to", "1.0.1", "--path", str(alpha),
-                "--template-dir", str(_bundle_dir(upstream, "1.0.1"))]) == 0
+    assert cli(["upgrade", "--dry-run", "--to", "1.0.3", "--path", str(alpha),
+                "--template-dir", str(_bundle_dir(upstream, "1.0.3"))]) == 0
     assert _tree_hashes(alpha) == before
 
     # apply 1.0.1 -> template version moves
-    assert cli(_uargs(alpha, upstream, "1.0.1")) == 0
-    assert _status_json(alpha, capsys)["versions"]["template"] == "1.0.1"
+    assert cli(_uargs(alpha, upstream, "1.0.3")) == 0
+    assert _status_json(alpha, capsys)["versions"]["template"] == "1.0.3"
     _commit_all(alpha, "upgrade 1.0.1")
 
     # idempotent re-run: zero diff outside backup dirs
     before = _tree_hashes(alpha)
-    assert cli(_uargs(alpha, upstream, "1.0.1")) == 0
+    assert cli(_uargs(alpha, upstream, "1.0.3")) == 0
     after = _tree_hashes(alpha)
     assert before == after
 
@@ -80,7 +80,7 @@ def test_beta_conflict_then_upgrade_then_pr(tmp_path, monkeypatch, capsys):
     import os
 
     upstream = _make_upstream(tmp_path, {
-        "1.0.1": {"workflow_note": "# beta-1.0.1"},
+        "1.0.3": {"workflow_note": "# beta-1.0.1"},
         "1.1.0": {"workflow_note": "# beta-1.1.0"},
     })
     seed = {
@@ -100,18 +100,18 @@ def test_beta_conflict_then_upgrade_then_pr(tmp_path, monkeypatch, capsys):
     wf.write_text(customized)
     _commit_all(beta, "beta team tweak")
     assert _status_json(beta, capsys)["state"] == "DRIFTED"
-    rc = cli(_uargs(beta, upstream, "1.0.1"))
+    rc = cli(_uargs(beta, upstream, "1.0.3"))
     assert rc == 3
     assert wf.read_text() == customized
 
     # resolve: take the upstream template, re-run -> clean upgrade
     from pathlib import Path as _P
     import shutil
-    bundle_wf = _bundle_dir(upstream, "1.0.1") / "workflows" / "lacd-verify.yml"
+    bundle_wf = _bundle_dir(upstream, "1.0.3") / "workflows" / "lacd-verify.yml"
     shutil.copy(bundle_wf, wf)
     _commit_all(beta, "accept upstream workflow")
-    assert cli(_uargs(beta, upstream, "1.0.1")) == 0
-    assert _status_json(beta, capsys)["versions"]["template"] == "1.0.1"
+    assert cli(_uargs(beta, upstream, "1.0.3")) == 0
+    assert _status_json(beta, capsys)["versions"]["template"] == "1.0.3"
     # project-owned files still intact
     assert (beta / ".github" / "workflows" / "ci.yml").read_text() == \
         "name: existing-ci\n"

@@ -512,3 +512,51 @@ def test_load_bundle_from_zip_accepts_correct_sha():
     data = buf.getvalue()
     bundle = load_bundle_from_zip(data, hashlib.sha256(data).hexdigest())
     assert bundle.version == "1.0.1"
+
+
+# ---------------------------------------------------------------------------
+# v1.0.2 additions: real v1.0.1 fixture + no phantom v1.0.2
+# ---------------------------------------------------------------------------
+
+def _real_v101_release():
+    with open(_fixture_path("real-v101-release.json"), encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def test_parse_real_v101_closed_fence_and_sha_line():
+    """The real v1.0.1 release (closed fence + Template-Bundle-SHA256 line)
+    must parse to a usable bundle descriptor."""
+    from lacd.upgrade.source import parse_template_bundle
+    rel = _real_v101_release()
+    assert rel["tag_name"] == "v1.0.1"
+    parsed = parse_template_bundle(rel)
+    assert parsed is not None, "real v1.0.1 release must be parseable"
+    assert parsed["url"] == (
+        "https://github.com/SkyCjq/LACD/releases/download/v1.0.1/"
+        "lacd-templates-1.0.1.zip")
+    assert parsed["sha256"] == "a01c9e4f0227a35ff3755af891962840706bb408b50470c66bf03159e7e7ec51"
+    assert len(parsed["sha256"]) == 64
+
+
+def test_list_releases_identifies_v100_and_v101_not_phantom_v102():
+    """upgrade --check source layer: real v1.0.0/v1.0.1 fixtures are
+    identified; v1.0.2 must NOT appear as discoverable (not released).
+
+    Guards against 'pretending v1.0.2 is published' — the release list
+    comes only from actual release entries, never from local version strings.
+    """
+    from lacd.upgrade.source import ReleaseInfo, parse_template_bundle, version_from_tag
+    v100 = _real_v100_release()
+    v101 = _real_v101_release()
+
+    # Simulate what GitHubSource.list_releases does with real API entries.
+    def _from_entry(entry):
+        tag = entry.get("tag_name")
+        return ReleaseInfo(version=version_from_tag(tag), tag=tag,
+                           template_bundle=parse_template_bundle(entry))
+    releases = [_from_entry(v101), _from_entry(v100)]
+    tags = [r.tag for r in releases]
+    assert "v1.0.1" in tags
+    assert "v1.0.0" in tags
+    assert not any(t.startswith("v1.0.2") for t in tags), (
+        f"v1.0.2 must not be discoverable before release; got tags={tags}")

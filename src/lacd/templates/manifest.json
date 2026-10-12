@@ -1,5 +1,5 @@
 {
-  "template_version": "1.0.1",
+  "template_version": "1.0.2",
   "files": [
     {
       "path": "project-rules.template.yaml",
@@ -11,7 +11,7 @@
     },
     {
       "path": "workflows/lacd-verify.yml",
-      "sha256": "900304a0be36d3f98b56667bef9c781daa5a4c9b6bf3741beca581e63c03727e"
+      "sha256": "433c558294bec495606bd01e8bda9477c950d8eca234d5791dcc235e2ec51d27"
     }
   ]
 }

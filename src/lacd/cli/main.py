@@ -636,11 +636,276 @@ def _detect_repo_branch(project_dir: Path) -> tuple[str | None, str | None]:
     return repo, branch
 
 
+def _get_trusted_required_checks(project_dir: Path, trusted_sha: str) -> tuple[list, list]:
+    """Read required_checks from the TRUSTED BASE SHA, not working tree.
+
+    This is the core trust boundary fix (Q2 B2): the PR cannot lower its own
+    bar by committing weakened config to its own HEAD, because we read from
+    origin/main (or other verified base), not from the PR's files.
+
+    Returns (checks, warnings). Uses git show <sha>:<path>.
+    """
+    warnings: list = []
+
+    def _validate(raw) -> tuple[list | None, bool]:
+        if raw is None:
+            return None, False
+        if isinstance(raw, str):
+            warnings.append("POLICY_CONFIG_UNPARSEABLE")
+            return None, True
+        if not isinstance(raw, list):
+            warnings.append("POLICY_CONFIG_UNPARSEABLE")
+            return None, True
+        cleaned = []
+        for c in raw:
+            if isinstance(c, str) and c:
+                cleaned.append(c)
+            elif "INVALID_CHECK_ENTRY" not in warnings:
+                warnings.append("INVALID_CHECK_ENTRY")
+        seen, deduped = set(), []
+        for c in cleaned:
+            if c not in seen:
+                seen.add(c); deduped.append(c)
+            elif "DUPLICATE_CHECKS_REMOVED" not in warnings:
+                warnings.append("DUPLICATE_CHECKS_REMOVED")
+        return deduped, True
+
+    # 1. lacd.yaml from trusted SHA (SEC-R4-01: git errors are fail-closed)
+    yaml_text, yaml_err = _read_file_at_sha(project_dir, trusted_sha, "lacd.yaml")
+    if yaml_err:
+        # Git read failed -> UNVERIFIED, do NOT fall back to weaker policy
+        return [], warnings + [yaml_err]
+    if yaml_text is not None:
+        try:
+            import yaml as _yaml
+            from lacd.config.schema import validate_config_dict
+            raw_data = _yaml.safe_load(yaml_text)
+            errors = validate_config_dict(raw_data)
+            if errors:
+                return [], warnings + ["POLICY_CONFIG_UNPARSEABLE"]
+            gov_raw = (raw_data.get("governance") or {}) if isinstance(raw_data, dict) else {}
+            yaml_raw = gov_raw.get("required_checks", None)
+            checks, explicit = _validate(yaml_raw)
+            if explicit:
+                return checks if checks is not None else [], warnings
+        except Exception:
+            return [], warnings + ["POLICY_CONFIG_UNPARSEABLE"]
+
+    # 2. lock.json from trusted SHA (SEC-R4-01: git errors are fail-closed)
+    lock_text, lock_err = _read_file_at_sha(project_dir, trusted_sha, ".lacd/lock.json")
+    if lock_err:
+        return [], warnings + [lock_err]
+    if lock_text is not None:
+        try:
+            import json
+            from lacd.config.lockfile import validate_lock_dict, LockFile
+            data = json.loads(lock_text)
+            errors = validate_lock_dict(data)
+            if errors:
+                return [], warnings + ["POLICY_CONFIG_UNPARSEABLE"]
+            lock = LockFile.from_dict(data)
+            checks, explicit = _validate(lock.required_checks)
+            if checks is not None:
+                return checks, warnings
+        except Exception:
+            return [], warnings + ["POLICY_CONFIG_UNPARSEABLE"]
+
+    return [], warnings
+
+
+def _get_required_checks(project_dir: Path) -> tuple[list, list]:
+    """Return (checks, warnings) for the enforcement policy.
+
+    Source priority (D2 v3): ``lacd.yaml`` governance.required_checks >
+    ``.lacd/lock.json`` required_checks (via LockFile.load) > empty.
+
+    Explicit empty list [] in yaml does NOT fall back to lock (explicit wins).
+    Missing/None in yaml DOES fall back to lock.
+
+    Input validation:
+    - String "ci" (not list) -> invalid, POLICY_CONFIG_UNPARSEABLE
+    - Non-string entries -> filtered with INVALID_CHECK_ENTRY warning
+    - Parse errors -> ([], ["POLICY_CONFIG_UNPARSEABLE"])
+    - Duplicates removed with "DUPLICATE_CHECKS_REMOVED" warning
+    """
+    warnings: list = []
+
+    def _validate(raw, source: str) -> tuple[list | None, bool]:
+        """Return (checks, is_explicit). None checks = not present/invalid."""
+        if raw is None:
+            return None, False  # not present -> fall through
+        if isinstance(raw, str):
+            # "ci" is not ["ci"]; reject to avoid ["c","i"] bug
+            warnings.append("POLICY_CONFIG_UNPARSEABLE")
+            return None, True  # explicit but invalid -> do not fall back
+        if not isinstance(raw, list):
+            warnings.append("POLICY_CONFIG_UNPARSEABLE")
+            return None, True
+        # raw is a list (possibly empty)
+        cleaned = []
+        for c in raw:
+            if isinstance(c, str) and c:
+                cleaned.append(c)
+            else:
+                if "INVALID_CHECK_ENTRY" not in warnings:
+                    warnings.append("INVALID_CHECK_ENTRY")
+        # Deduplicate
+        seen = set()
+        deduped = []
+        for c in cleaned:
+            if c not in seen:
+                seen.add(c)
+                deduped.append(c)
+            elif "DUPLICATE_CHECKS_REMOVED" not in warnings:
+                warnings.append("DUPLICATE_CHECKS_REMOVED")
+        return deduped, True  # explicit (even if [])
+
+    # 1. lacd.yaml governance.required_checks
+    # NOTE: check raw yaml dict (not parsed dataclass) to distinguish
+    # explicit [] from missing field (dataclass default is []).
+    try:
+        from lacd.config.schema import load_config, ConfigNotFound
+        import yaml as _yaml
+        yaml_path = Path(project_dir) / "lacd.yaml"
+        if not yaml_path.is_file():
+            raise ConfigNotFound(f"no lacd.yaml in {project_dir}")
+        raw_data = _yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+        # Validate via load_config (raises on invalid; mockable in tests)
+        load_config(str(project_dir))
+        gov_raw = (raw_data.get("governance") or {}) if isinstance(raw_data, dict) else {}
+        yaml_raw = gov_raw.get("required_checks", None)  # None = not present
+        checks, explicit = _validate(yaml_raw, "yaml")
+        if explicit:
+            return checks if checks is not None else [], warnings
+        # not explicit -> fall through to lock
+    except ConfigNotFound:
+        pass  # no yaml -> try lock
+    except Exception:
+        return [], ["POLICY_CONFIG_UNPARSEABLE"]
+
+    # 2. lock.json via LockFile.load() (legitimate chain, not raw JSON)
+    try:
+        from lacd.config.lockfile import LockFile
+        lock = LockFile.load(project_dir)
+        lock_raw = lock.required_checks
+        checks, explicit = _validate(lock_raw, "lock")
+        if checks is not None:
+            return checks, warnings
+        return [], warnings
+    except FileNotFoundError:
+        return [], warnings  # no lock -> empty, no warning
+    except Exception:
+        return [], warnings + ["POLICY_CONFIG_UNPARSEABLE"]
+
+
+def _check_config_trust(project_dir: Path) -> tuple[str, list, str | None]:
+    """Resolve trusted baseline for policy.
+
+    Returns (trusted_sha, warnings, error).
+    - trusted_sha: 40-char SHA of origin/main or merge-base, or None
+    - warnings: list of warning codes
+    - error: error code if trust cannot be established, else None
+
+    Trust root: the protected base branch at a verified SHA.
+    Priority (SEC-R5-03):
+    1. LACD_TRUSTED_BASE_SHA env var (CI binds from GitHub PR metadata;
+       not forgeable by PR content since env comes from workflow, not PR files)
+    2. git rev-parse origin/main (local ref; documented limitation: a local
+       attacker with git write access can move this ref - see docs)
+
+    The PR's own HEAD is NEVER the trust root.
+    """
+    import os
+    import subprocess
+
+    def _valid_sha(s: str) -> bool:
+        return len(s) == 40 and all(c in "0123456789abcdef" for c in s.lower())
+
+    def _verify_commit(project_dir: Path, sha: str) -> bool:
+        try:
+            r = subprocess.run(
+                ["git", "cat-file", "-t", sha],
+                cwd=str(project_dir), capture_output=True, text=True, timeout=10)
+            return r.returncode == 0 and r.stdout.strip() == "commit"
+        except Exception:
+            return False
+
+    # 1. Explicit env binding (preferred in CI)
+    env_sha = (os.environ.get("LACD_TRUSTED_BASE_SHA") or "").strip().lower()
+    if env_sha:
+        if not _valid_sha(env_sha):
+            return None, [], "POLICY_BASE_SHA_UNVERIFIED"
+        if not _verify_commit(project_dir, env_sha):
+            return None, [], "POLICY_BASE_SHA_UNVERIFIED"
+        return env_sha, ["TRUSTED_BASE_FROM_ENV"], None
+
+    # 2. Local origin/main (fallback; see documented limitation)
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "origin/main"],
+            cwd=str(project_dir), capture_output=True, text=True, timeout=10)
+        if r.returncode != 0:
+            return None, [], "POLICY_TRUST_ANCHOR_MISSING"
+        base_sha = r.stdout.strip()
+        if len(base_sha) != 40 or not all(c in "0123456789abcdef" for c in base_sha):
+            return None, [], "POLICY_BASE_SHA_UNVERIFIED"
+
+        # Verify the SHA is actually reachable (not a stale ref)
+        r2 = subprocess.run(
+            ["git", "cat-file", "-t", base_sha],
+            cwd=str(project_dir), capture_output=True, text=True, timeout=10)
+        if r2.returncode != 0 or r2.stdout.strip() != "commit":
+            return None, [], "POLICY_BASE_SHA_UNVERIFIED"
+
+        return base_sha, [], None
+    except subprocess.TimeoutExpired:
+        return None, [], "POLICY_GIT_TIMEOUT"
+    except Exception:
+        return None, [], "POLICY_GIT_ERROR"
+
+
+def _read_file_at_sha(project_dir: Path, sha: str, rel_path: str) -> tuple[str | None, str | None]:
+    """Read file content at a specific commit SHA.
+
+    Returns (content, error):
+    - (text, None): file read successfully
+    - (None, None): file confirmed not to exist at this SHA (git show exit 128 with "does not exist")
+    - (None, "POLICY_GIT_ERROR"): git failed (other non-zero exit or exception)
+    - (None, "POLICY_GIT_TIMEOUT"): git timed out
+
+    Callers MUST NOT treat git errors as "file not found" (SEC-R4-01).
+    """
+    import subprocess
+    try:
+        r = subprocess.run(
+            ["git", "show", f"{sha}:{rel_path}"],
+            cwd=str(project_dir), capture_output=True, text=True, timeout=10)
+        if r.returncode == 0:
+            return r.stdout, None
+        # Distinguish "not exist" from other git errors (SEC-R5-01).
+        # ONLY "does not exist" / "path does not exist" means confirmed absent.
+        # "bad revision" is a revision parse error -> git error, NOT "not found".
+        stderr = (r.stderr or "").lower()
+        if "does not exist" in stderr or "path does not exist" in stderr:
+            return None, None  # confirmed absent
+        return None, "POLICY_GIT_ERROR"
+    except subprocess.TimeoutExpired:
+        return None, "POLICY_GIT_TIMEOUT"
+    except Exception:
+        return None, "POLICY_GIT_ERROR"
+
+
 def _remote_dimension(contract, project_dir: Path):
     """Compute the remote_enforcement dimension.
 
     Returns (DimensionResult, note). Never raises for a missing module or a
     missing repo: those degrade to unverified with a reason code (AT-07).
+
+    v1.0.2 (FR-102-02): always constructs an explicit ``EnforcementPolicy``
+    from the project's verified configuration and passes it to
+    ``check_remote_enforcement``. The ``policy=None`` legacy path is never
+    used on this path. When no required checks are configured, the dimension
+    degrades to UNVERIFIED (fail-closed, no false ENFORCED).
     """
     try:
         check_remote_enforcement = _get_check_remote_enforcement()
@@ -657,14 +922,70 @@ def _remote_dimension(contract, project_dir: Path):
                                           reasons=["NO_GITHUB_REMOTE"]),
                 "no git origin remote pointing at GitHub; remote enforcement "
                 "cannot be checked")
+
+    # Trust boundary (Q2 B2): resolve trusted base SHA FIRST.
+    # Policy MUST come from origin/main (protected base), NEVER from PR working tree.
+    trusted_sha, trust_warnings, trust_error = _check_config_trust(project_dir)
+    if trust_error:
+        # Cannot establish trust root -> UNVERIFIED (fail-closed, never ENFORCED)
+        return (contract.DimensionResult(
+                    status="unverified",
+                    reasons=[trust_error] + trust_warnings),
+                f"cannot establish trusted policy baseline: {trust_error}")
+
+    # Read policy from TRUSTED SHA, not working tree
+    required_checks, check_warnings = _get_trusted_required_checks(project_dir, trusted_sha)
+    all_warnings = trust_warnings + check_warnings
+
+    # SEC-R5-02: any policy read/config error -> UNVERIFIED immediately.
+    # Do NOT continue to remote enforcement check with broken policy.
+    _fatal_policy_errors = {"POLICY_GIT_ERROR", "POLICY_GIT_TIMEOUT",
+                            "POLICY_CONFIG_UNPARSEABLE"}
+    _hit = _fatal_policy_errors.intersection(all_warnings)
+    if _hit:
+        return (contract.DimensionResult(
+                    status="unverified",
+                    reasons=sorted(_hit) + [w for w in all_warnings if w not in _hit]),
+                f"policy resolution failed ({', '.join(sorted(_hit))}); "
+                "remote enforcement cannot be verified (fail-closed)")
+
+    from lacd.github.remote import EnforcementPolicy
+    policy = EnforcementPolicy(
+        policy_version="1",
+        require_pull_request=True,
+        required_checks=required_checks,
+        allow_bypass=False,
+        human_merge_required=True,
+    )
     try:
-        rep = check_remote_enforcement(repo, branch or "main", token=None, timeout=15)
+        rep = check_remote_enforcement(repo, branch or "main", policy=policy,
+                                       token=None, timeout=15)
     except Exception as exc:
         return (contract.DimensionResult(status="unverified",
                                           reasons=["REMOTE_NETWORK_ERROR"]),
                 f"remote check raised {type(exc).__name__}: {exc}")
+    # Fail-closed: with no configured required checks, an "enforced" verdict
+    # would be a false positive (nothing was actually required). Downgrade.
+    if not required_checks and rep.status == "enforced":
+        return (contract.DimensionResult(
+                    status="unverified",
+                    reasons=["REQUIRED_CHECKS_UNCONFIGURED"] + all_warnings + list(rep.reasons)),
+                "no required checks configured for this project; remote "
+                "enforcement cannot be verified (fail-closed)")
+    # SEC-R6-01: local fallback (no LACD_TRUSTED_BASE_SHA) is non-security-assurance
+    # mode. It can report NOT_ENFORCED or UNVERIFIED, but NEVER ENFORCED, because
+    # local origin/main can be moved by anyone with git write access.
+    _trusted_mode = "TRUSTED_BASE_FROM_ENV" in all_warnings
+    if not _trusted_mode and rep.status == "enforced":
+        return (contract.DimensionResult(
+                    status="unverified",
+                    reasons=["UNTRUSTED_BASE_FALLBACK"] + all_warnings + list(rep.reasons)),
+                "trusted base from local origin/main (not externally verified); "
+                "cannot assert ENFORCED in non-security-assurance mode (fail-closed)")
+    # Propagate warnings (trusted base SHA is in all_warnings via trust resolution)
+    all_reasons = all_warnings + list(rep.reasons)
     return (contract.DimensionResult(status=rep.status,
-                                      reasons=list(rep.reasons)),
+                                      reasons=all_reasons),
             None)
 
 
