@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 
-DEFAULT_UPSTREAM_REPO = "SkyCjq/LACD"
+DEFAULT_UPSTREAM_REPO = "SkyOneBranch/LACD"
 
 
 @dataclass

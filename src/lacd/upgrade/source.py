@@ -25,7 +25,7 @@ if TYPE_CHECKING:  # avoid a hard runtime dependency on config/models
 
 log = logging.getLogger(__name__)
 
-DEFAULT_UPSTREAM_REPO = "SkyCjq/LACD"
+DEFAULT_UPSTREAM_REPO = "SkyOneBranch/LACD"
 DEFAULT_API_BASE = "https://api.github.com"
 DEFAULT_TIMEOUT = 15
 
@@ -176,7 +176,7 @@ class UpgradeSource(ABC):
         """Build the effective source from config + environment overrides.
 
         - repo: $LACD_UPSTREAM_REPO overrides config.lacd.upstream_repo,
-          which defaults to "SkyCjq/LACD".
+          which defaults to "SkyOneBranch/LACD".
         - If template_dir (or $LACD_TEMPLATE_DIR) points at a directory
           containing releases.json, a FileSource on it is returned for
           fully-offline / test use. Otherwise a GitHubReleasesSource.

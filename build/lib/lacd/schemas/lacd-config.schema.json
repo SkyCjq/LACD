@@ -1,0 +1,137 @@
+{
+  "$id": "https://example.invalid/lacd/schemas/lacd-config/1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Schema version \"1\" for the adopter-side lacd.yaml configuration file.",
+  "properties": {
+    "agents": {
+      "additionalProperties": false,
+      "properties": {
+        "auto_detect": {
+          "type": "boolean"
+        },
+        "protocol": {
+          "enum": [
+            "lacd"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "protocol",
+        "auto_detect"
+      ],
+      "type": "object"
+    },
+    "governance": {
+      "additionalProperties": false,
+      "properties": {
+        "human_merge_required": {
+          "type": "boolean"
+        },
+        "pull_request_required": {
+          "type": "boolean"
+        },
+        "required_checks": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "risk_tiers": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "pull_request_required",
+        "human_merge_required",
+        "risk_tiers"
+      ],
+      "type": "object"
+    },
+    "lacd": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "mode": {
+          "enum": [
+            "lacd"
+          ],
+          "type": "string"
+        },
+        "policy_version": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "upstream_repo": {
+          "default": "SkyOneBranch/LACD",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "enabled",
+        "mode",
+        "policy_version"
+      ],
+      "type": "object"
+    },
+    "project": {
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "description": "Relative path (inside the project) of the project-owned rules file.",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "extensions"
+      ],
+      "type": "object"
+    },
+    "schema_version": {
+      "const": "1",
+      "description": "Configuration schema version.",
+      "type": "string"
+    },
+    "verification": {
+      "additionalProperties": false,
+      "properties": {
+        "bind_to_commit_sha": {
+          "type": "boolean"
+        },
+        "fail_closed": {
+          "type": "boolean"
+        },
+        "github_enforcement_required": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "bind_to_commit_sha",
+        "fail_closed",
+        "github_enforcement_required"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema_version",
+    "lacd",
+    "governance",
+    "verification",
+    "agents",
+    "project"
+  ],
+  "title": "LACD project configuration (lacd.yaml)",
+  "type": "object"
+}
