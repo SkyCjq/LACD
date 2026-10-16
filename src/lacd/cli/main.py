@@ -35,7 +35,7 @@ from types import SimpleNamespace
 from lacd import __version__
 from lacd.cli import templates_dir
 
-DEFAULT_UPSTREAM_REPO = "SkyCjq/LACD"
+DEFAULT_UPSTREAM_REPO = "SkyOneBranch/LACD"
 AGENTS_SECTION_ID = "lacd-agent-protocol"
 AGENTS_BEGIN_RE = re.compile(
     r'<!-- LACD:MANAGED:BEGIN section="lacd-agent-protocol"[^>]*-->'

@@ -55,7 +55,7 @@ def test_init_creates_all_files(tmp_path, capsys):
     assert cfg["schema_version"] == "1"
     assert cfg["lacd"] == {
         "enabled": True, "mode": "lacd",
-        "policy_version": "1", "upstream_repo": "SkyCjq/LACD",
+        "policy_version": "1", "upstream_repo": "SkyOneBranch/LACD",
     }
     assert cfg["governance"]["risk_tiers"] == ["T0", "T1", "T2"]
     assert cfg["verification"]["github_enforcement_required"] is True
@@ -67,7 +67,7 @@ def test_init_creates_all_files(tmp_path, capsys):
     assert lock["lock_format_version"] == "1"
     assert lock["lacd_cli_version"] == __version__
     assert lock["source"]["type"] == "git-tag"
-    assert lock["source"]["repo"] == "SkyCjq/LACD"
+    assert lock["source"]["repo"] == "SkyOneBranch/LACD"
     assert lock["source"]["ref"] == "v" + __version__
     assert lock["source"]["commit"] is None  # unknown: honest null, never invented
     assert lock["template_version"] == __version__

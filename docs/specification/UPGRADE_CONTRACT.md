@@ -48,7 +48,7 @@
 
 ## 4. 升级发现
 
-`lacd upgrade --check` 从**明确的可信上游来源**（默认 `SkyCjq/LACD` 的
+`lacd upgrade --check` 从**明确的可信上游来源**（默认 `SkyOneBranch/LACD` 的
 GitHub Releases；可配置；测试可用 `file://` 本地源）查询版本，识别：
 
 - 是否存在可用版本、是否在支持范围、Patch/Minor/Major 分类、升级前置条件。

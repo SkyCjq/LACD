@@ -1,3 +1,3 @@
-"""LACD v1.0.2: local-first adoption & change governance."""
+"""LACD v1.0.3: local-first adoption & change governance."""
 
-__version__ = "1.0.2"
+__version__ = "1.0.3"

@@ -10,10 +10,10 @@
 Open-source governance workflow for AI coding agents: verifiable adoption,
 GitHub PR safeguards, human review, and safe versioned upgrades.
 
-- Repository: https://github.com/SkyCjq/LACD
+- Repository: https://github.com/SkyOneBranch/LACD
 - License: MIT
 - Language: Python 3.11+ (CLI: `lacd`; runtime deps: pyyaml, jsonschema)
-- Install: `pip install "git+https://github.com/SkyCjq/LACD.git@v1.0.1"`
+- Install: `pip install "git+https://github.com/SkyOneBranch/LACD.git@v1.0.2"`
 
 ## What it is
 

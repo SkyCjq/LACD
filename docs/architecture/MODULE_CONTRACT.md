@@ -45,7 +45,7 @@ lacd:
   enabled: true               # 必需，bool
   mode: "lacd"                # 必需，枚举 ["lacd"]
   policy_version: "1"         # 必需，字符串
-  upstream_repo: "SkyCjq/LACD"  # 可选，默认 "SkyCjq/LACD"
+  upstream_repo: "SkyOneBranch/LACD"  # 可选，默认 "SkyOneBranch/LACD"
 governance:                   # 必需
   pull_request_required: true # 必需，bool
   human_merge_required: true  # 必需，bool
@@ -72,7 +72,7 @@ JSON Schema 文件：`schemas/lacd-config.schema.json`（`$id` 含 `lacd-config/
 {
   "lock_format_version": "1",
   "lacd_cli_version": "1.0.0",
-  "source": {"type": "git-tag", "repo": "SkyCjq/LACD", "ref": "v1.0.0", "commit": "<40位hex或null>"},
+  "source": {"type": "git-tag", "repo": "SkyOneBranch/LACD", "ref": "v1.0.0", "commit": "<40位hex或null>"},
   "schema_version": "1",
   "policy_version": "1",
   "template_version": "1.0.0",
@@ -344,8 +344,8 @@ class MigrationPlan:
 def plan_migration(project_dir, lock: LockFile, bundle: "TemplateBundle") -> MigrationPlan:
     """纯计算，不写盘。三方比较：
     managed(replace)：old=lock 记录的 sha256；cur=文件当前 sha256；new=bundle 内容。
-      cur==old -> update；cur==new or old==new -> noop；缺失且 old 存在 -> conflict(missing)；
-      否则 conflict。
+      cur==new -> noop；cur==old（且 old!=new）-> update；缺失且 old 存在 -> conflict(missing)；
+      否则 conflict（v1.0.3 ADR-0015：当前内容优先判定；old==new 不再短路为 noop，防 DRIFT 掩盖）；
     shared(marked-section)：抽取 AGENTS.md 中 markers 间内容做同样三方比较；
       无 markers -> 视为 add-section（非 conflict，不删用户内容）。
     project-owned：永不列入 changes（只读校验存在性）。"""

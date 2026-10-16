@@ -5,15 +5,15 @@
 ## 从 git 安装（推荐，可复现）
 
 ```bash
-pip install "git+https://github.com/SkyCjq/LACD.git@v1.0.0"
+pip install "git+https://github.com/SkyOneBranch/LACD.git@v1.0.2"
 # 或固定到精确 commit：
-pip install "git+https://github.com/SkyCjq/LACD.git@<40位commit SHA>"
+pip install "git+https://github.com/SkyOneBranch/LACD.git@<40位commit SHA>"
 ```
 
 ## 本地安装（开发）
 
 ```bash
-git clone https://github.com/SkyCjq/LACD.git && cd LACD
+git clone https://github.com/SkyOneBranch/LACD.git && cd LACD
 pip install .
 ```
 
@@ -21,7 +21,7 @@ pip install .
 
 ```bash
 python -m venv .venv-lacd-1.0.0 && . .venv-lacd-1.0.0/bin/activate
-pip install "git+https://github.com/SkyCjq/LACD.git@v1.0.0"
+pip install "git+https://github.com/SkyOneBranch/LACD.git@v1.0.2"
 lacd status --json
 ```
 

@@ -72,7 +72,7 @@
           "type": "string"
         },
         "upstream_repo": {
-          "default": "SkyCjq/LACD",
+          "default": "SkyOneBranch/LACD",
           "minLength": 1,
           "type": "string"
         }

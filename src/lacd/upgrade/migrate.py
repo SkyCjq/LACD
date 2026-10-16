@@ -246,13 +246,13 @@ def _iter_ops(project: Path, lock: LockFile, bundle: TemplateBundle) -> list[_Wr
                                     "add: not present on disk"))
             continue
         cur_sha = _sha256_hex(target.read_bytes())
-        if old is not None and old == new_sha:
-            ops.append(_WriteOp(rel, new_bytes, new_sha, "noop", risk,
-                                "noop: template unchanged since lock"))
-        elif cur_sha == new_sha:
+        # v1.0.3 (ADR-0015): check current content FIRST. The old
+        # "old == new -> noop" shortcut masked drift when the template did
+        # not change between versions but the user had edited the file.
+        if cur_sha == new_sha:
             ops.append(_WriteOp(rel, new_bytes, new_sha, "noop", risk,
                                 "noop: already at target content"))
-        elif cur_sha == old:
+        elif old is not None and cur_sha == old:
             ops.append(_WriteOp(rel, new_bytes, new_sha, "update", risk,
                                 "update: unmodified since lock, applying new template"))
         else:
@@ -292,13 +292,12 @@ def _iter_ops(project: Path, lock: LockFile, bundle: TemplateBundle) -> list[_Wr
                 "add-section: markers absent, will append managed section"))
             continue
         cur_sha = _sha256_hex(cur_section.encode("utf-8"))
-        if old is not None and old == new_sha:
-            ops.append(_WriteOp(rel, b"", new_sha, "noop", risk,
-                                "noop: template section unchanged since lock"))
-        elif cur_sha == new_sha:
+        # v1.0.3 (ADR-0015): same fail-closed ordering as managed files —
+        # current content decides first; never mask section drift.
+        if cur_sha == new_sha:
             ops.append(_WriteOp(rel, b"", new_sha, "noop", risk,
                                 "noop: managed section already at target"))
-        elif cur_sha == old:
+        elif old is not None and cur_sha == old:
             ops.append(_WriteOp(
                 rel, _replace_section(text, section, bundle.version, new_bytes),
                 new_sha, "update", risk,
@@ -370,6 +369,9 @@ def _update_lock_json(project: Path, bundle: TemplateBundle,
     try:
         from lacd import __version__ as cli_version
         data["generated_by"] = f"lacd {cli_version}"
+        # v1.0.3 (HD-04 option A): lacd_cli_version records the CLI version
+        # performing the migration, so version_consistency compares reality.
+        data["lacd_cli_version"] = cli_version
     except Exception:
         data["generated_by"] = "lacd"
     lock_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")

@@ -78,7 +78,7 @@ def test_load_config_ok_and_defaults(tmp_path):
     assert cfg.schema_version == "1"
     assert cfg.lacd.enabled is True
     assert cfg.lacd.mode == "lacd"
-    assert cfg.lacd.upstream_repo == DEFAULT_UPSTREAM_REPO == "SkyCjq/LACD"
+    assert cfg.lacd.upstream_repo == DEFAULT_UPSTREAM_REPO == "SkyOneBranch/LACD"
     assert cfg.governance.risk_tiers == ["T0", "T1", "T2"]
     assert cfg.verification.github_enforcement_required is True
     assert cfg.agents.protocol == "lacd"
@@ -88,7 +88,7 @@ def test_load_config_ok_and_defaults(tmp_path):
 def test_config_round_trip_to_dict():
     cfg = LacdConfig.from_dict(valid_config_dict())
     d = cfg.to_dict()
-    assert d["lacd"]["upstream_repo"] == "SkyCjq/LACD"
+    assert d["lacd"]["upstream_repo"] == "SkyOneBranch/LACD"
     cfg2 = LacdConfig.from_dict(d)
     assert cfg2.to_dict() == d
 
