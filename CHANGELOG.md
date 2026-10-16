@@ -4,7 +4,36 @@ All notable changes to LACD are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows
 [Semantic Versioning](https://semver.org/).
 
-## [1.0.2] — (unreleased)
+## [1.0.3] — (unreleased)
+
+Patch (SemVer Patch, backward compatible). Repository migration compatibility,
+upgrade reliability, and README product experience:
+
+### Changed
+- **Default upstream repository**: `SkyCjq/LACD` → `SkyOneBranch/LACD`
+  (CLI defaults, config schema default, managed workflow install URL,
+  release/runbook URLs). Explicit `upstream_repo` config and existing locks
+  are never overridden (ADR-0014).
+- **Adopter template**: `lacd-verify.yml` installs
+  `git+https://github.com/SkyOneBranch/LACD.git@v1.0.3`; `manifest.json`
+  `template_version` = `1.0.3` with recomputed SHA-256.
+- **CODEOWNERS**: `@SkyCjq` → `@SkyOneBranch`.
+
+### Fixed
+- **Upgrade lock sync (risk B)**: `_update_lock_json()` now writes
+  `lacd_cli_version` = the CLI version performing the migration, so
+  `version_consistency` reflects reality (HD-04 option A).
+- **Noop masking drift (risk C)**: `old == new_sha` no longer short-circuits
+  to noop without checking current file content; drifted files now surface
+  as conflict/DRIFT (ADR-0015).
+
+### Added
+- Regression tests for pre-existing DRIFT conflicts, noop semantics,
+  lock version sync, and old-repository compatibility matrix (B-1~B-7).
+- README (EN/ZH) rewritten: product positioning, role metaphors, 11-section
+  structure, verified copy-paste commands.
+
+## [1.0.2] — 2026-10-12
 
 Patch (SemVer Patch, backward compatible). Implements
 `docs/specification/V1_0_2_DELTA.md`:
@@ -124,4 +153,6 @@ First public version. Implements the complete v1.0 contract:
 - Multi-version coexistence uses per-version virtualenvs (no single
   dispatcher binary yet).
 
-[1.0.0]: https://github.com/SkyCjq/LACD/releases/tag/v1.0.0
+[1.0.0]: https://github.com/SkyOneBranch/LACD/releases/tag/v1.0.0
+[1.0.1]: https://github.com/SkyOneBranch/LACD/releases/tag/v1.0.1
+[1.0.2]: https://github.com/SkyOneBranch/LACD/releases/tag/v1.0.2

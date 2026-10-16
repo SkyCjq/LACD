@@ -51,7 +51,7 @@
 `lacd-templates-X.Y.Z.zip` — SHA-256 verified by `lacd upgrade` before use:
 
 ```json
-{"template_bundle": {"url": "https://github.com/SkyCjq/LACD/releases/download/vX.Y.Z/lacd-templates-X.Y.Z.zip", "sha256": "<64 hex>"}}
+{"template_bundle": {"url": "https://github.com/SkyOneBranch/LACD/releases/download/vX.Y.Z/lacd-templates-X.Y.Z.zip", "sha256": "<64 hex>"}}
 ```
 
 Template-Bundle-SHA256: <64 hex>
@@ -61,7 +61,7 @@ Template-Bundle-SHA256: <64 hex>
 - `<64 hex>` 两处必须一致，且等于附件 zip 的真实 sha256（`sha256sum` 实测，
   不得手填）。
 - `url` 必须与附件的 `browser_download_url` 一致
-  （`https://github.com/SkyCjq/LACD/releases/download/vX.Y.Z/lacd-templates-X.Y.Z.zip`）。
+  （`https://github.com/SkyOneBranch/LACD/releases/download/vX.Y.Z/lacd-templates-X.Y.Z.zip`）。
 - JSON 块的围栏必须闭合（开头和结尾各一行 ` ``` `）。
 
 ### 发布校验清单（Human 发布时逐项打勾）

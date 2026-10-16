@@ -17,7 +17,7 @@
 ## Development setup
 
 ```bash
-git clone https://github.com/SkyCjq/LACD.git && cd LACD
+git clone https://github.com/SkyOneBranch/LACD.git && cd LACD
 python3 -m venv .venv && . .venv/bin/activate
 pip install -e ".[test]"
 pytest -q            # full suite: unit + integration + acceptance

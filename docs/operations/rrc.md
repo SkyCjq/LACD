@@ -12,7 +12,7 @@
 | 输入 | 来源 | 示例 |
 |---|---|---|
 | `MERGE_SHA` | PR 页面的 merge commit | `56dcfd2e...`（40 位完整） |
-| `PR_URL` | GitHub PR | `https://github.com/SkyCjq/LACD/pull/2` |
+| `PR_URL` | GitHub PR | `https://github.com/SkyOneBranch/LACD/pull/2` |
 | `VERSION` | 本次发布版本 | `1.0.2` |
 | Q2 记录 | 独立审查交付 | reviewer/模型/时间/`reviewed_head_sha`/结论原文 |
 
@@ -22,8 +22,8 @@
 
 ```bash
 # 1. PR 确实已合并，且 merge_commit_sha == main HEAD
-gh api /repos/SkyCjq/LACD/pulls/<N> --jq '{merged, merge_commit_sha}'
-gh api /repos/SkyCjq/LACD/branches/main --jq '.commit.sha'
+gh api /repos/SkyOneBranch/LACD/pulls/<N> --jq '{merged, merge_commit_sha}'
+gh api /repos/SkyOneBranch/LACD/branches/main --jq '.commit.sha'
 # 断言：merged == true，且两处 SHA 相等（前 8 位对上不够，要全 40 位）
 ```
 
@@ -37,7 +37,7 @@ gh api /repos/SkyCjq/LACD/branches/main --jq '.commit.sha'
 
 ```bash
 # 2. 合并 SHA 的 CI run（注意：看 merge commit 的 run，不是 PR 分支旧 run）
-gh api "/repos/SkyCjq/LACD/actions/runs?per_page=5" \
+gh api "/repos/SkyOneBranch/LACD/actions/runs?per_page=5" \
   --jq '.workflow_runs[] | {sha: .head_sha, event, status, conclusion}'
 # 断言：head_sha == MERGE_SHA（完整 40 位）的 run，status == completed，conclusion == success
 ```
@@ -52,7 +52,7 @@ gh api "/repos/SkyCjq/LACD/actions/runs?per_page=5" \
 
 ```bash
 # 3. 分支保护要求了哪些 checks（需要 admin 权限；403 则转 HOLD）
-gh api /repos/SkyCjq/LACD/branches/main/protection/required_status_checks
+gh api /repos/SkyOneBranch/LACD/branches/main/protection/required_status_checks
 # 断言：checks 列表与 CI 的 job 名一致（如 "test (3.11)" / "test (3.12)"），
 # 且 RRC-2 的绿 run 确实覆盖了这些 checks
 ```
@@ -93,7 +93,7 @@ gh api /repos/SkyCjq/LACD/branches/main/protection/required_status_checks
 ```bash
 # 4. 从 MERGE_SHA 构建 wheel，断言模板/版本一致
 rm -rf rrc-build /tmp/rrc-wheel && mkdir -p /tmp/rrc-wheel
-git clone https://github.com/SkyCjq/LACD.git rrc-build
+git clone https://github.com/SkyOneBranch/LACD.git rrc-build
 cd rrc-build
 git checkout <MERGE_SHA_FULL>
 pip wheel --no-deps . -w /tmp/rrc-wheel
@@ -159,7 +159,7 @@ from lacd.upgrade.source import parse_template_bundle
 notes = open("release-notes-draft.md").read()  # Human 按模板起草的正文
 parsed = parse_template_bundle({"body": notes, "assets": [
     {"name": "lacd-templates-<VERSION>.zip",
-     "browser_download_url": "https://github.com/SkyCjq/LACD/releases/download/v<VERSION>/lacd-templates-<VERSION>.zip"}]})
+     "browser_download_url": "https://github.com/SkyOneBranch/LACD/releases/download/v<VERSION>/lacd-templates-<VERSION>.zip"}]})
 assert parsed is not None, "Release notes 无法解析出 bundle（参考 v1.0.0 未闭合围栏事故）"
 assert len(parsed["sha256"]) == 64
 print("notes parseable:", parsed["url"])
