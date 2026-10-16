@@ -45,10 +45,10 @@ Some providers may offer free usage tiers for low-cost experimentation. **Availa
 
 **Prerequisites:** Python 3.11+, Git, and an existing Git project. For the full GitHub PR workflow, you also need a GitHub repository and suitable permissions. An isolated Python virtual environment is recommended.
 
-The command below installs the **currently released v1.0.2** ([see Releases](https://github.com/SkyOneBranch/LACD/releases)). Run these commands in your project directory:
+Install the **current stable release, v1.0.3** ([see Releases](https://github.com/SkyOneBranch/LACD/releases)). Run these commands in your project directory:
 
 ```bash
-python -m pip install "git+https://github.com/SkyOneBranch/LACD.git@v1.0.2"
+python -m pip install "git+https://github.com/SkyOneBranch/LACD.git@v1.0.3"
 lacd --version
 lacd init --dry-run
 lacd init
@@ -60,7 +60,7 @@ lacd verify --local --strict
 
 `verify --local --strict` checks local conditions only. **It does not prove that GitHub branch protection is enforced.** See the [adoption guide](docs/operations/adopt.md) and [governance protocol](docs/specification/PROTOCOL.md) for remote verification.
 
-Note: v1.0.2 may record the previous repository name, `SkyCjq/LACD`, in its lock file. That is an authentic historical source record. Do not edit the lock just to hide a mismatch. Use actual release evidence when installing or upgrading.
+If your project uses an older LACD version, its lock file may retain the original upstream repository name. This is historical source information, not something to rewrite manually. Follow the [upgrade guide](docs/operations/upgrade.md) when upgrading.
 
 ## Safety boundaries and further reading
 
