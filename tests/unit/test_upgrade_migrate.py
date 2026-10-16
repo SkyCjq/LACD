@@ -613,3 +613,64 @@ def test_planner_require_bundle_with_bundle_ok(tmp_path):
                               bundle=_bundle("1.1.0"),
                               require_bundle=True)
     assert plan.to_version == "1.1.0"
+
+
+# ---------------------------------------------------------------------------
+# v1.0.3 regression tests: risk B (lock cli version sync) and risk C
+# (old==new must not mask drift). HD-04 option A, HD-05 approved fix.
+# ---------------------------------------------------------------------------
+
+def test_plan_conflict_when_old_equals_new_but_drifted(tmp_path):
+    # Risk C: bundle identical to locked baseline, but disk was drifted
+    # by the user -> must be conflict, never noop.
+    _project(tmp_path, workflow=b"user drifted workflow\n")
+    same = TemplateBundle(version="1.0.0",
+                          files={"workflows/lacd-verify.yml": OLD_WORKFLOW,
+                                 "managed/agents-md.section.md": OLD_SECTION},
+                          manifest={})
+    plan = plan_migration(tmp_path, LockFile.load(tmp_path), same)
+    conflict = [c for c in plan.conflicts
+                if c.path == ".github/workflows/lacd-verify.yml"]
+    assert len(conflict) == 1
+    assert "locally-modified" in conflict[0].detail
+
+
+def test_plan_shared_conflict_when_old_equals_new_but_section_drifted(tmp_path):
+    # Risk C (shared files): same rule for the AGENTS.md managed section.
+    drifted = _agents_with_section(b"user edited the managed section\n")
+    _project(tmp_path, agents=drifted)
+    same = TemplateBundle(version="1.0.0",
+                          files={"workflows/lacd-verify.yml": OLD_WORKFLOW,
+                                 "managed/agents-md.section.md": OLD_SECTION},
+                          manifest={})
+    plan = plan_migration(tmp_path, LockFile.load(tmp_path), same)
+    conflict = [c for c in plan.conflicts if c.path == "AGENTS.md"]
+    assert len(conflict) == 1
+    assert "locally-modified" in conflict[0].detail
+
+
+def test_plan_noop_when_old_equals_new_and_clean(tmp_path):
+    # True noop: old == new AND disk matches baseline -> noop, zero diff.
+    _project(tmp_path)
+    same = TemplateBundle(version="1.0.0",
+                          files={"workflows/lacd-verify.yml": OLD_WORKFLOW,
+                                 "managed/agents-md.section.md": OLD_SECTION},
+                          manifest={})
+    plan = plan_migration(tmp_path, LockFile.load(tmp_path), same)
+    assert _action(plan, ".github/workflows/lacd-verify.yml") == "noop"
+    assert _action(plan, "AGENTS.md") == "noop"
+    assert plan.conflicts == []
+
+
+def test_update_lock_json_writes_lacd_cli_version(tmp_path):
+    # Risk B (HD-04 option A): after a successful migration the lock's
+    # lacd_cli_version must equal the CLI version performing the migration.
+    import lacd
+    _project(tmp_path)
+    plan = plan_migration(tmp_path, LockFile.load(tmp_path), _bundle())
+    result = apply_migration(tmp_path, plan, _bundle())
+    assert result.lock_updated is True
+    lock = json.loads((tmp_path / ".lacd" / "lock.json").read_text(encoding="utf-8"))
+    assert lock["lacd_cli_version"] == lacd.__version__
+    assert lock["template_version"] == "1.1.0"
+    assert lock["generated_by"] == f"lacd {lacd.__version__}"

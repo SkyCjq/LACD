@@ -253,7 +253,7 @@ class _FakeConfig:
 def test_from_config_defaults_to_documented_repo():
     src = UpgradeSource.from_config(_FakeConfig())
     assert isinstance(src, GitHubReleasesSource)
-    assert src.repo == "SkyCjq/LACD"
+    assert src.repo == "SkyOneBranch/LACD"
 
 
 def test_from_config_env_override(monkeypatch):
@@ -560,3 +560,49 @@ def test_list_releases_identifies_v100_and_v101_not_phantom_v102():
     assert "v1.0.0" in tags
     assert not any(t.startswith("v1.0.2") for t in tags), (
         f"v1.0.2 must not be discoverable before release; got tags={tags}")
+
+
+# ---------------------------------------------------------------------------
+# v1.0.3 WP1: old-adopter compatibility (B-1..B-7 matrix, ADR-0014)
+# ---------------------------------------------------------------------------
+
+def test_from_config_explicit_old_repo_not_overridden():
+    # B-1: an explicit upstream_repo = SkyCjq/LACD (written by v1.0.2 init)
+    # must keep resolving the old source; the new default must not override it.
+    src = UpgradeSource.from_config(_FakeConfig("SkyCjq/LACD"))
+    assert isinstance(src, GitHubReleasesSource)
+    assert src.repo == "SkyCjq/LACD"
+
+
+def test_from_config_missing_field_falls_back_to_new_default():
+    # B-2: config without upstream_repo -> new built-in default.
+    src = UpgradeSource.from_config(_FakeConfig())
+    assert src.repo == "SkyOneBranch/LACD"
+
+
+def test_old_lock_source_repo_stays_readable():
+    # B-4: a v1.0.2 lock with source.repo = SkyCjq/LACD must load as-is;
+    # nothing may silently rewrite it (see test_lockfile fixtures).
+    from lacd.config.lockfile import LockFile
+    import tempfile, json
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / ".lacd"
+        p.mkdir()
+        lock = {
+            "lock_format_version": "1",
+            "lacd_cli_version": "1.0.2",
+            "source": {"type": "git-tag", "repo": "SkyCjq/LACD",
+                       "ref": "v1.0.2", "commit": None},
+            "schema_version": "1", "policy_version": "1",
+            "template_version": "1.0.2",
+            "managed_files": [], "shared_files": [],
+            "generated_at": "2026-10-12T00:00:00+00:00",
+            "generated_by": "lacd 1.0.2",
+        }
+        (p / "lock.json").write_text(json.dumps(lock), encoding="utf-8")
+        loaded = LockFile.load(d)
+        assert loaded.source.repo == "SkyCjq/LACD"
+        # raw bytes untouched: no re-signing on read
+        raw = json.loads((p / "lock.json").read_text(encoding="utf-8"))
+        assert raw["source"]["repo"] == "SkyCjq/LACD"

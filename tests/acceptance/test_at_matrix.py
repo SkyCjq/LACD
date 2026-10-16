@@ -250,14 +250,14 @@ def test_at_07_permission_denied_is_unverified_not_pass():
 
 @needs_live
 def test_at_07_live_remote_check(tmp_path):
-    """AT-07 (live): real remote check against SkyCjq/LACD.
+    """AT-07 (live): real remote check against SkyOneBranch/LACD.
 
     Requires LACD_RUN_LIVE_TESTS=1 and a token with admin scope in
     GITHUB_TOKEN. Reported as UNVERIFIED otherwise.
     """
     from lacd.github.remote import check_remote_enforcement
     token = os.environ.get("GITHUB_TOKEN")
-    rep = check_remote_enforcement("SkyCjq/LACD", "main", token=token)
+    rep = check_remote_enforcement("SkyOneBranch/LACD", "main", token=token)
     assert rep.status in ("enforced", "not_enforced", "unverified")
     assert rep.reasons  # always machine-readable
 
