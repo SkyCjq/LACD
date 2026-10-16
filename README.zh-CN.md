@@ -100,7 +100,7 @@ lacd verify --local --strict   # 本地检查必须通过，否则非零退出
 `init` 幂等（跑两次会提示 `already-initialized`），不执行 `git add`/`commit`/`push`，
 不静默覆盖你的文件。详见 [docs/operations/adopt.md](docs/operations/adopt.md)。
 
-真实运行记录（2026-10-16 对开发构建实测；已发布的 v1.0.2 这些命令行为一致）：
+真实运行记录（2026-10-16 对开发构建 v1.0.3 实测）。已发布的 v1.0.2 接受相同的命令、流程一致；其输出中的版本号为 `1.0.2`、默认上游为之前的 `SkyCjq/LACD`，与下方示例不同：
 
 ```text
 $ lacd init --dry-run

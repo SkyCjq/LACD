@@ -136,8 +136,10 @@ lacd verify --local --strict   # local checks must pass; exits non-zero otherwis
 never runs `git add`/`commit`/`push`, and never silently overwrites your
 files. Details: [docs/operations/adopt.md](docs/operations/adopt.md).
 
-Real transcript (commands run 2026-10-16 against the development build;
-released v1.0.2 behaves the same for these commands):
+Real transcript (commands run 2026-10-16 against the development build,
+v1.0.3). Released v1.0.2 accepts the same commands and follows the same
+workflow; its output shows version `1.0.2` and the previous default upstream
+`SkyCjq/LACD` instead of the values below:
 
 ```text
 $ lacd init --dry-run
