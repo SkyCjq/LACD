@@ -45,10 +45,10 @@ AI 可以很快生成代码，却仍可能误解需求、漏掉测试，或影�
 
 **准备：** Python 3.11+、Git、一个现有的 Git 项目；若使用完整 GitHub PR 流程，还需要 GitHub 仓库及相应权限。建议在独立的 Python 虚拟环境中安装。
 
-下面使用**当前正式发布的 v1.0.2**（[查看 Releases](https://github.com/SkyOneBranch/LACD/releases)）。在项目目录运行：
+下面安装**当前正式发布的 v1.0.3**（[查看 Releases](https://github.com/SkyOneBranch/LACD/releases)）。请在项目目录运行：
 
 ```bash
-python -m pip install "git+https://github.com/SkyOneBranch/LACD.git@v1.0.2"
+python -m pip install "git+https://github.com/SkyOneBranch/LACD.git@v1.0.3"
 lacd --version
 lacd init --dry-run
 lacd init
@@ -60,7 +60,7 @@ lacd verify --local --strict
 
 `verify --local --strict` 只验证本地条件，**不能证明 GitHub 分支保护已生效**。如需检查远端保护，请阅读[采用指南](docs/operations/adopt.md)与[治理协议](docs/specification/PROTOCOL.md)。
 
-注意：v1.0.2 可能在版本锁中记录历史仓库名 `SkyCjq/LACD`；这是该版本的真实来源记录，不要仅为消除差异自行修改锁文件。新版本安装和升级应以真实发布记录为准。
+如果你的项目使用过旧版 LACD，版本锁中可能仍保留原来的上游仓库名称。这是真实的历史来源信息，不应手工改写。需要升级时，请参考[升级指南](docs/operations/upgrade.md)。
 
 ## 安全边界与更多资料
 
